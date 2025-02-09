@@ -97,27 +97,7 @@ class AccountingBook():
             case _:
                 raise NotImplementedError(f"Dump method for file extension {file_extension} not implemented")
 
-    @staticmethod
-    def _ask_date() -> datetime:
-        date = input("Fecha (DD-MM-YYYY, presiona Enter para hoy): ").strip()
-        if not date:  # Si el usuario deja vacío, toma la fecha actual
-            date = datetime.now().strftime(DateElements.FORMAT_DDMMYYYY.value)
-        try:
-            date = datetime.strptime(date, DateElements.FORMAT_DDMMYYYY.value).strftime(
-                DateElements.FORMAT_DDMMYYYY.value)
-        except ValueError:
-            print("Formato de fecha inválido. Intenta nuevamente.")
-            AccountingBook._ask_date()
-        return pd.to_datetime(date, format=DateElements.FORMAT_DDMMYYYY.value)
-
     def new_register(self, date, category, amount, comments):
-        print("Introduce los datos de la transacción:")
-
-        #date = AccountingBook._ask_date()
-        #category = self._ask_category()
-        #amount = AccountingBook._ask_amount()
-        #comments = AccountingBook._ask_comments()
-
         new_registration = BookCell(date, category, amount, comments)
 
         self._data.append(new_registration)
@@ -151,11 +131,10 @@ class AccountingBook():
                 for entry in filtered_cases:
                     entry._display_data()
 
-    def _create_expense_category(self):
-        category_label = input("Introduce el nombre de la nueva categoría de gasto: ")
-        self._categories.append(category_label)
+    def create_expense_category(self, new_category: str):
+        self._categories.append(new_category)
         self._save_to_file(self._categories, self._categories_file)
-        print(f"La nueva categoría de gasto {category_label} ha sido añadida correctamente.")
+        print(f"La nueva categoría de gasto {new_category} ha sido añadida correctamente.")
 
     #def _edit_register(self):# TODO
 

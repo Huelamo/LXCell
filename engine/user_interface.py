@@ -50,7 +50,7 @@ class UserInterface():
     def _ask_category(self) -> str:
         if len(self._active_book.categories) == 0:
             print("No hay categorías preexistentes. Se creará una nueva.")
-            self._active_book._create_expense_category()
+            self._create_expense_category()
         print("Estas son las categorías existentes:")
         i = 1
         for category in self._active_book.categories:
@@ -60,9 +60,9 @@ class UserInterface():
 
         if not answer:
             print("Debes seleccionar una de las categorías del listado. Prueba otra vez.")
-            UserInterface._ask_category()
+            self._ask_category()
         elif answer == "0":
-            self._active_book._create_expense_category()
+            self._create_expense_category()
             return self._ask_category()
         else:
             try:
@@ -74,6 +74,7 @@ class UserInterface():
 
 
     def _new_register(self):
+        print("Introduce los datos de la transacción:")
         date = UserInterface._ask_date()
         category = self._ask_category()
         amount = UserInterface._ask_amount()
@@ -81,7 +82,9 @@ class UserInterface():
 
         self._active_book.new_register(date, category, amount, comments)
 
-
+    def _create_expense_category(self):
+        category_label = input("Introduce el nombre de la nueva categoría de gasto: ")
+        self._active_book.create_expense_category(category_label)
 
     def _display_data(self):
         category = self._active_book._ask_category()
@@ -152,7 +155,7 @@ class UserInterface():
                 case "3":
                     raise NotImplementedError("Lamentablemente, esta opción todavía no está implementada. Elige otra.")
                 case "4":
-                    self._active_book._create_expense_category()
+                    self._create_expense_category()
                 case "5":
                     raise NotImplementedError("Lamentablemente, esta opción todavía no está implementada. Elige otra.")
                 case "6":
