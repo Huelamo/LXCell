@@ -5,7 +5,6 @@ import pickle
 from pathlib import Path
 import pandas as pd
 
-
 from engine.accounting_book import AccountingBook
 from engine.user_interface import UserInterface
 from enums.engine_enums import Directories, FileExtensions, DateElements
@@ -17,6 +16,8 @@ DUMMY_AMOUNT = "10.3"
 DUMMY_COMMENT = "dummy comment"
 registers_file_extension = FileExtensions.PICKLE
 categories_file_extension = FileExtensions.JSON
+
+
 class TestBookInitializer(TestCase):
 
     def setUp(self) -> None:
@@ -40,7 +41,6 @@ class TestBookInitializer(TestCase):
         "2"  # Confirmar eliminación
     ])
     def test_new_register(self, mock_input):
-
         UserInterface()
         with open(f'{self._path_data}/categories_{DUMMY_USER}.{categories_file_extension.value}') as f:
             categories = json.load(f)
@@ -65,6 +65,7 @@ class TestBookInitializer(TestCase):
             self.assertEqual(register.comments, DUMMY_COMMENT)
 
         UserInterface()
+
 
 if __name__ == '__main__':
     TestBookInitializer()

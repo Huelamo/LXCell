@@ -1,9 +1,10 @@
 from datetime import datetime
 import pandas as pd
 
-
 from engine.accounting_book import AccountingBook
 from enums.engine_enums import RegisterHeaders, DateElements
+
+
 class UserInterface():
 
     def __init__(self):
@@ -66,12 +67,11 @@ class UserInterface():
             return self._ask_category()
         else:
             try:
-                return self._active_book.categories[int(answer)-1]
+                return self._active_book.categories[int(answer) - 1]
             except IndexError:
                 print("La respuesta indicada no corresponde a ninguna categoría existente.")
                 print("Por favor, indica el número de una de las categorías de la lista.")
                 self._ask_category()
-
 
     def _new_register(self):
         print("Introduce los datos de la transacción:")
@@ -130,18 +130,19 @@ class UserInterface():
 
     def edit_register(self):
         date = input("Indica la fecha del registro que deseas modificar (DD-MM-YYYY): ")
+
     def _menu(self):
         while True:
             print("\n--- Gestor de Gastos ---")
             print("1. Añadir nuevo registro")
             print("2. Ver registros")
-            print("3. Editar registro")  #TODO
+            print("3. Editar registro")  # TODO
             print("4. Añadir categoría de gasto")
-            print("5. Añadir categoría de ingreso")  #TODO
-            print("6. Editar categoría de gasto")  #TODO
-            print("7. Editar categoría de ingreso")  #TODO
+            print("5. Añadir categoría de ingreso")  # TODO
+            print("6. Editar categoría de gasto")  # TODO
+            print("7. Editar categoría de ingreso")  # TODO
             print("8. Eliminar datos de usuario")
-            print("9. Restaurar datos de usuario")  #TODO
+            print("9. Restaurar datos de usuario")  # TODO
             print("10. Salir")
 
             opcion = input("\nSelecciona una opción: ").strip()

@@ -17,9 +17,10 @@ _BACKUP_PATH.mkdir(exist_ok=True)
 registers_file_extension = FileExtensions.PICKLE
 categories_file_extension = FileExtensions.JSON
 
+
 class AccountingBook():
 
-    def __init__(self, user, load_data: bool=False):
+    def __init__(self, user, load_data: bool = False):
         self._user = user
         self._data_file = f'registers_{self._user}.{registers_file_extension.value}'
         self._categories_file = f'categories_{self._user}.{categories_file_extension.value}'
@@ -34,7 +35,7 @@ class AccountingBook():
     @property
     def categories(self):
         return self._categories
-    
+
     @staticmethod
     def _check_existing_registers(user: str):
         return os.path.exists(f"{_DATA_PATH}/{FileIds.BOOK_FILE_PREFIX}{user}.{registers_file_extension.value}")
@@ -136,13 +137,13 @@ class AccountingBook():
         self._save_to_file(self._categories, self._categories_file)
         print(f"La nueva categoría de gasto {new_category} ha sido añadida correctamente.")
 
-    #def _edit_register(self):# TODO
+    # def _edit_register(self):# TODO
 
-        #date = self._ask_date()
-        #category = self._ask_category()
-        #print("El gasto que va a ser editado es el siguiente:")
-        #self._display_data(filters)
-        #new_amount = self._ask_amount()
+    # date = self._ask_date()
+    # category = self._ask_category()
+    # print("El gasto que va a ser editado es el siguiente:")
+    # self._display_data(filters)
+    # new_amount = self._ask_amount()
 
     @staticmethod
     def _delete_user_data(user):
@@ -179,6 +180,7 @@ class AccountingBook():
 
         print(f"Los datos de '{user}' han sido restaurados. Puedes encontrarlos en: {_DATA_PATH}")
 
+
 class BookCell():
     def __init__(self, date: datetime, category: str, amount: float, comments: str):
         self.date = date
@@ -196,6 +198,7 @@ class BookCell():
         print(f"{RegisterHeaders.COMMENT.value}: {self.comments}")
         print("\n")
 
+
 def get_load_method(file_extension: FileExtensions) -> Callable:
     match file_extension:
         case FileExtensions.PICKLE:
@@ -204,6 +207,7 @@ def get_load_method(file_extension: FileExtensions) -> Callable:
             return json.load
         case _:
             raise NotImplementedError(f"Load method for file extension {file_extension} not implemented")
+
 
 def get_file_read_mode(file_extension: FileExtensions) -> ReadMode:
     match file_extension:
