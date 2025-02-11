@@ -27,7 +27,7 @@ class UserInterface():
                 DateElements.FORMAT_DDMMYYYY.value)
         except ValueError:
             print("Formato de fecha inválido. Intenta nuevamente.")
-            UserInterface._ask_date()
+            return UserInterface._ask_date()
         return pd.to_datetime(date, format=DateElements.FORMAT_DDMMYYYY.value)
 
     @staticmethod
@@ -87,19 +87,19 @@ class UserInterface():
         self._active_book.create_expense_category(category_label)
 
     def _display_data(self):
-        category = self._active_book._ask_category()
+        category = self._ask_category()  # TODO: si no hay categorías preexistentes pregunta si quieres crear una nueva, lo cual no tiene sentido en esta función
         filters = {RegisterHeaders.CATEGORY: category}
 
         year = input("Indica el año correspondiente en el que se produjo la transacción que deseas consultar. "
                      "Si quieres ver todo el histórico, pulsa la tecla Enter: ")
         if not year:
-            self._active_book._display_data(filters=filters)
+            self._active_book.display_data(filters=filters)
         else:
             filters.update({DateElements.YEAR: int(year)})
             month = input("Indica el número del mes correspondiente en el que se produjo la transacción que deseas "
                           "consultar. Si quieres consultar el año completo, pulsa la tecla Enter: ")
             if not month:
-                self._active_book._display_data(filters=filters)
+                self._active_book.display_data(filters=filters)
             else:
                 day = input("Indica el día correspondiente en el que se produjo la transacción que deseas "
                             "consultar. Si quieres consultar el mes completo, pulsa la tecla Enter: ")
@@ -107,7 +107,7 @@ class UserInterface():
                     filters.update({DateElements.MONTH: int(month)})
                 else:
                     filters.update({DateElements.MONTH: int(month), DateElements.DAY: int(day)})
-                self._active_book._display_data(filters=filters)
+                self._active_book.display_data(filters=filters)
 
     def _delete_user_data(self):
 
@@ -122,14 +122,24 @@ class UserInterface():
             case "1":
                 print(f"\nOperación cancelada. No se eliminaron los datos correspondientes al usuario {self._user}\n")
             case "2":
-                self._active_book._delete_user_data(self._user)
+                self._active_book.delete_user_data(self._user)
                 return
             case _:
                 print("Respuesta no válida. Por favor, inténtalo de nuevo.\n")
                 self._delete_user_data()
 
-    def edit_register(self):
-        date = input("Indica la fecha del registro que deseas modificar (DD-MM-YYYY): ")
+    def _edit_register(self):
+        self._display_data()
+        register_id = int(input("Pega aquí el ID del registro que deseas modificar: ").strip())
+        print("Introduce los nuevos datos del registro.")
+        date = UserInterface._ask_date()
+        category = self._ask_category()
+        amount = UserInterface._ask_amount()
+        comments = UserInterface._ask_comments()
+        self._active_book.edit_register(register_id=register_id, new_date=date, new_category=category,
+                                        new_amount=amount,
+                                        new_comments=comments)
+        print("¡Registro modificado con éxito!")
 
     def _menu(self):
         while True:
@@ -154,7 +164,8 @@ class UserInterface():
                 case "2":
                     self._display_data()
                 case "3":
-                    raise NotImplementedError("Lamentablemente, esta opción todavía no está implementada. Elige otra.")
+                    self._edit_register()
+                    AccountingBook._save_to_file(self._active_book._data, self._active_book._data_file)
                 case "4":
                     self._create_expense_category()
                 case "5":

@@ -1,5 +1,4 @@
 import json
-import pandas as pd
 import os
 import shutil
 from datetime import datetime
@@ -18,7 +17,7 @@ registers_file_extension = FileExtensions.PICKLE
 categories_file_extension = FileExtensions.JSON
 
 
-class AccountingBook():
+class AccountingBook:
 
     def __init__(self, user, load_data: bool = False):
         self._user = user
@@ -41,11 +40,7 @@ class AccountingBook():
         return os.path.exists(f"{_DATA_PATH}/{FileIds.BOOK_FILE_PREFIX}{user}.{registers_file_extension.value}")
 
     @staticmethod
-    def _create_book(user: str) -> list:
-        return []
-
-    @staticmethod
-    def _load_book(user: str) -> list:
+    def _load_book(user: str) -> dict:
         file_name = f"{FileIds.BOOK_FILE_PREFIX.value}{user}.{registers_file_extension.value}"
         file_extension = FileExtensions.get_file_extension(file_name)
         load_method = get_load_method(file_extension)
@@ -62,10 +57,10 @@ class AccountingBook():
             match answer:
                 case "1":
                     print("\nSe ha creado un nuevo libro de cuentas")
-                    return []
+                    return {}
                 case "2":
                     print(f"\nComprobando la existencia de copias de seguridad del usuario '{user}'")
-                    AccountingBook._restore_user_data()
+                    AccountingBook._restore_user_data(user)
                 case "3":
                     print("\nHas elegido cerrar sesión. ¡Hasta pronto!")
 
@@ -99,17 +94,18 @@ class AccountingBook():
                 raise NotImplementedError(f"Dump method for file extension {file_extension} not implemented")
 
     def new_register(self, date, category, amount, comments):
-        new_registration = BookCell(date, category, amount, comments)
+        new_registration = BookCell(self.user, date, category, amount, comments)
 
-        self._data.append(new_registration)
+        self._data.update({new_registration.id: new_registration})
         print("¡Transacción añadida con éxito!")
 
-    def _display_data(self, filters: dict):
+    def display_data(self, filters: dict):
         if not self._data:
             print("No hay transacciones registradas.")
         else:
             # Filter the category
-            filtered_cases = [entry for entry in self._data if entry.category == filters[RegisterHeaders.CATEGORY]]
+            filtered_cases = [entry for entry in self._data.values() if
+                              entry.category == filters[RegisterHeaders.CATEGORY]]
 
             # Filter the year
             if DateElements.YEAR in filters:
@@ -130,23 +126,22 @@ class AccountingBook():
                     print(f"{DateElements.DAY.value}: {filters[DateElements.DAY]}")
             else:
                 for entry in filtered_cases:
-                    entry._display_data()
+                    entry.display_data()
+
+    def edit_register(self, register_id: int, new_date: datetime, new_category: str, new_amount: float,
+                      new_comments: str):
+        self._data[register_id].date = new_date
+        self._data[register_id].category = new_category
+        self._data[register_id].amount = new_amount
+        self._data[register_id].comments = new_comments
 
     def create_expense_category(self, new_category: str):
         self._categories.append(new_category)
         self._save_to_file(self._categories, self._categories_file)
         print(f"La nueva categoría de gasto {new_category} ha sido añadida correctamente.")
 
-    # def _edit_register(self):# TODO
-
-    # date = self._ask_date()
-    # category = self._ask_category()
-    # print("El gasto que va a ser editado es el siguiente:")
-    # self._display_data(filters)
-    # new_amount = self._ask_amount()
-
     @staticmethod
-    def _delete_user_data(user):
+    def delete_user_data(user):
         data_file = f"{FileIds.BOOK_FILE_PREFIX.value}{user}.{registers_file_extension.value}"
         categories_file = f"{FileIds.CATEGORIES_FILE_PREFIX.value}{user}.{categories_file_extension.value}"
         if not os.path.exists(f"{_DATA_PATH}/{data_file}"):
@@ -181,16 +176,25 @@ class AccountingBook():
         print(f"Los datos de '{user}' han sido restaurados. Puedes encontrarlos en: {_DATA_PATH}")
 
 
-class BookCell():
-    def __init__(self, date: datetime, category: str, amount: float, comments: str):
+class BookCell:
+    def __init__(self, user: str, date: datetime, category: str, amount: float, comments: str):
+        self._user = user
         self.date = date
         self.category = category
         self.amount = amount
         self.comments = comments
         self._registration_time = datetime.now().strftime(DateElements.FORMAT_DDMMYYYYHHMMSS.value)
-        self.id = self._registration_time.replace('-', '').replace(' ', '').replace(':', '')
+        self._id = int(self._registration_time.replace('-', '').replace(' ', '').replace(':', ''))
 
-    def _display_data(self):
+    @property
+    def user(self):
+        return self._user
+
+    @property
+    def id(self):
+        return self._id
+
+    def display_data(self):
         print(f"\n---- ID del gasto: {self.id} ----\n")
         print(f"{RegisterHeaders.DATE.value}: {self.date.strftime(DateElements.FORMAT_DDMMYYYY.value)}")
         print(f"{RegisterHeaders.CATEGORY.value}: {self.category}")
