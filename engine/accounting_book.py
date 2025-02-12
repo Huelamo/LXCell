@@ -1,5 +1,4 @@
 import json
-import pandas as pd
 import os
 import shutil
 from datetime import datetime
@@ -17,12 +16,13 @@ _BACKUP_PATH.mkdir(exist_ok=True)
 registers_file_extension = FileExtensions.PICKLE
 categories_file_extension = FileExtensions.JSON
 
-class AccountingBook():
 
-    def __init__(self, user, load_data: bool=False):
+class AccountingBook:
+
+    def __init__(self, user, load_data: bool = False):
         self._user = user
-        self._data_file = f'registers_{self._user}.{registers_file_extension.value}'
-        self._categories_file = f'categories_{self._user}.{categories_file_extension.value}'
+        self._data_file = f'{FileIds.BOOK_FILE_PREFIX.value}{self._user}.{registers_file_extension.value}'
+        self._categories_file = f'{FileIds.CATEGORIES_FILE_PREFIX.value}{self._user}.{categories_file_extension.value}'
         if load_data:
             self._data = AccountingBook._load_book(self._user)
             self._categories = AccountingBook._load_categories(self._categories_file, self._user)
@@ -34,17 +34,13 @@ class AccountingBook():
     @property
     def categories(self):
         return self._categories
-    
+
     @staticmethod
     def _check_existing_registers(user: str):
         return os.path.exists(f"{_DATA_PATH}/{FileIds.BOOK_FILE_PREFIX}{user}.{registers_file_extension.value}")
 
     @staticmethod
-    def _create_book(user: str) -> list:
-        return []
-
-    @staticmethod
-    def _load_book(user: str) -> list:
+    def _load_book(user: str) -> dict:
         file_name = f"{FileIds.BOOK_FILE_PREFIX.value}{user}.{registers_file_extension.value}"
         file_extension = FileExtensions.get_file_extension(file_name)
         load_method = get_load_method(file_extension)
@@ -61,10 +57,10 @@ class AccountingBook():
             match answer:
                 case "1":
                     print("\nSe ha creado un nuevo libro de cuentas")
-                    return []
+                    return {}
                 case "2":
                     print(f"\nComprobando la existencia de copias de seguridad del usuario '{user}'")
-                    AccountingBook._restore_user_data()
+                    AccountingBook._restore_user_data(user)
                 case "3":
                     print("\nHas elegido cerrar sesión. ¡Hasta pronto!")
 
@@ -79,7 +75,7 @@ class AccountingBook():
             return []
 
     @staticmethod
-    def _save_to_file(data: list, file_name: str):
+    def _save_to_file(data: list, file_name: str) -> None:
         file_extension = FileExtensions.get_file_extension(file_name)
         match file_extension:
             case FileExtensions.PICKLE:
@@ -97,81 +93,19 @@ class AccountingBook():
             case _:
                 raise NotImplementedError(f"Dump method for file extension {file_extension} not implemented")
 
-    @staticmethod
-    def _ask_date() -> datetime:
-        date = input("Fecha (DD-MM-YYYY, presiona Enter para hoy): ").strip()
-        if not date:  # Si el usuario deja vacío, toma la fecha actual
-            date = datetime.now().strftime(DateElements.FORMAT_DDMMYYYY.value)
-        try:
-            date = datetime.strptime(date, DateElements.FORMAT_DDMMYYYY.value).strftime(
-                DateElements.FORMAT_DDMMYYYY.value)
-        except ValueError:
-            print("Formato de fecha inválido. Intenta nuevamente.")
-            AccountingBook._ask_date()
-        return pd.to_datetime(date, format=DateElements.FORMAT_DDMMYYYY.value)
+    def new_register(self, date, category, amount, comments) -> None:
+        new_registration = BookCell(self.user, date, category, amount, comments)
 
-    def _ask_category(self) -> str:
-        if len(self._categories) == 0:
-            print("No hay categorías preexistentes. Se creará una nueva.")
-            self._create_expense_category()
-        print("Estas son las categorías existentes:")
-        i = 1
-        for category in self._categories:
-            print(f"{i}. {category}")
-            i += 1
-        answer = input("Indica la categoría de gasto o 0 para añadir una nueva categoría: ").strip()
-
-        if not answer:
-            print("Debes seleccionar una de las categorías del listado. Prueba otra vez.")
-            self._ask_category()
-        elif answer == "0":
-            self._create_expense_category()
-            return self._ask_category()
-        else:
-            try:
-                return self._categories[int(answer)-1]
-            except IndexError:
-                print("La respuesta indicada no corresponde a ninguna categoría existente.")
-                print("Por favor, indica el número de una de las categorías de la lista.")
-                self._ask_category()
-
-    @staticmethod
-    def _ask_amount() -> float:
-        amount = input("Introduce el importe (utiliza el punto como separador decimal): ").strip()
-        try:
-            amount = float(amount)
-        except ValueError:
-            print("Formato de importe inválido. Intenta nuevamente.")
-            AccountingBook._ask_amount()
-        return amount
-
-    @staticmethod
-    def _ask_comments() -> str:
-        comments = input("Escribe un comentario acerca de este gasto. Para dejarlo vacío, pulsa la tecla Enter: ")
-        if not comments:
-            return "Sin comentarios"
-        else:
-            return comments
-
-    def _new_register(self):
-        print("Introduce los datos de la transacción:")
-
-        date = AccountingBook._ask_date()
-        category = self._ask_category()
-        amount = AccountingBook._ask_amount()
-        comments = AccountingBook._ask_comments()
-
-        new_registration = BookCell(date, category, amount, comments)
-
-        self._data.append(new_registration)
+        self._data.update({new_registration.id: new_registration})
         print("¡Transacción añadida con éxito!")
 
-    def _display_data(self, filters: dict):
+    def display_data(self, filters: dict) -> None:
         if not self._data:
             print("No hay transacciones registradas.")
         else:
             # Filter the category
-            filtered_cases = [entry for entry in self._data if entry.category == filters[RegisterHeaders.CATEGORY]]
+            filtered_cases = [entry for entry in self._data.values() if
+                              entry.category == filters[RegisterHeaders.CATEGORY]]
 
             # Filter the year
             if DateElements.YEAR in filters:
@@ -192,24 +126,22 @@ class AccountingBook():
                     print(f"{DateElements.DAY.value}: {filters[DateElements.DAY]}")
             else:
                 for entry in filtered_cases:
-                    entry._display_data()
+                    entry.display_data()
 
-    def _create_expense_category(self):
-        category_label = input("Introduce el nombre de la nueva categoría de gasto: ")
-        self._categories.append(category_label)
+    def edit_register(self, register_id: int, new_date: datetime, new_category: str, new_amount: float,
+                      new_comments: str) -> None:
+        self._data[register_id].date = new_date
+        self._data[register_id].category = new_category
+        self._data[register_id].amount = new_amount
+        self._data[register_id].comments = new_comments
+
+    def create_expense_category(self, new_category: str) -> None:
+        self._categories.append(new_category)
         self._save_to_file(self._categories, self._categories_file)
-        print(f"La nueva categoría de gasto {category_label} ha sido añadida correctamente.")
-
-    #def _edit_register(self):# TODO
-
-        #date = self._ask_date()
-        #category = self._ask_category()
-        #print("El gasto que va a ser editado es el siguiente:")
-        #self._display_data(filters)
-        #new_amount = self._ask_amount()
+        print(f"La nueva categoría de gasto {new_category} ha sido añadida correctamente.")
 
     @staticmethod
-    def _delete_user_data(user):
+    def delete_user_data(user) -> None:
         data_file = f"{FileIds.BOOK_FILE_PREFIX.value}{user}.{registers_file_extension.value}"
         categories_file = f"{FileIds.CATEGORIES_FILE_PREFIX.value}{user}.{categories_file_extension.value}"
         if not os.path.exists(f"{_DATA_PATH}/{data_file}"):
@@ -225,7 +157,7 @@ class AccountingBook():
               f"directorio de respaldo: {_BACKUP_PATH}")
 
     @staticmethod
-    def _restore_user_data(user):
+    def _restore_user_data(user) -> None:
         data_file = f"{FileIds.BOOK_FILE_PREFIX.value}{user}.{registers_file_extension.value}"
         categories_file = f"{FileIds.CATEGORIES_FILE_PREFIX.value}{user}.{categories_file_extension.value}"
         if not os.path.exists(f"{_BACKUP_PATH}/{data_file}"):
@@ -243,22 +175,33 @@ class AccountingBook():
 
         print(f"Los datos de '{user}' han sido restaurados. Puedes encontrarlos en: {_DATA_PATH}")
 
-class BookCell():
-    def __init__(self, date: datetime, category: str, amount: float, comments: str):
+
+class BookCell:
+    def __init__(self, user: str, date: datetime, category: str, amount: float, comments: str):
+        self._user = user
         self.date = date
         self.category = category
         self.amount = amount
         self.comments = comments
         self._registration_time = datetime.now().strftime(DateElements.FORMAT_DDMMYYYYHHMMSS.value)
-        self.id = self._registration_time.replace('-', '').replace(' ', '').replace(':', '')
+        self._id = int(self._registration_time.replace('-', '').replace(' ', '').replace(':', ''))
 
-    def _display_data(self):
+    @property
+    def user(self):
+        return self._user
+
+    @property
+    def id(self):
+        return self._id
+
+    def display_data(self) -> None:
         print(f"\n---- ID del gasto: {self.id} ----\n")
         print(f"{RegisterHeaders.DATE.value}: {self.date.strftime(DateElements.FORMAT_DDMMYYYY.value)}")
         print(f"{RegisterHeaders.CATEGORY.value}: {self.category}")
         print(f"{RegisterHeaders.AMOUNT.value}: {self.amount}")
         print(f"{RegisterHeaders.COMMENT.value}: {self.comments}")
         print("\n")
+
 
 def get_load_method(file_extension: FileExtensions) -> Callable:
     match file_extension:
@@ -268,6 +211,7 @@ def get_load_method(file_extension: FileExtensions) -> Callable:
             return json.load
         case _:
             raise NotImplementedError(f"Load method for file extension {file_extension} not implemented")
+
 
 def get_file_read_mode(file_extension: FileExtensions) -> ReadMode:
     match file_extension:
