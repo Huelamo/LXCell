@@ -24,6 +24,7 @@ categories_file_extension = FileExtensions.JSON
 
 
 class TestBookInitializer(TestCase):
+
     @patch('builtins.input', side_effect=[
         DUMMY_USER,  # Nombre de usuario
         "1",  # Crear nuevo libro
@@ -34,26 +35,21 @@ class TestBookInitializer(TestCase):
         DUMMY_AMOUNT,  # Monto del gasto
         DUMMY_COMMENT,  # Comentario del gasto
         "10",  # Salir
-        DUMMY_USER,  # Iniciamos sesión de nuevo
-        "3",  # Modify register
-        "1",  # Select category
-        DUMMY_DATE.split('-')[-1],
-        DUMMY_DATE.split('-')[1],
-        DUMMY_DATE.split('-')[0],
-        DUMMY_ID,
-        MODIFIED_DATE,
-        "1",  # Seleccionamos la categoría de gasto
-        MODIFIED_AMOUNT,
-        MODIFIED_COMMENT,
-        "10",  # Salimos de nuevo
+    ])
+    @patch("engine.accounting_book.datetime")
+    def setUp(self, mock_datetime, mock_input) -> None:
+        # Mock the new register's ID
+        mock_datetime.now.return_value.strftime.return_value = DUMMY_ID
+
+        # Create new register
+        UserInterface()
+
+    @patch('builtins.input', side_effect=[
         DUMMY_USER,  # Iniciamos sesión de nuevo
         "8",  # Eliminar datos de usuario
         "2"  # Confirmar eliminación
     ])
-    @patch("engine.accounting_book.datetime")
-    def test_register(self, mock_datetime, mock_input):
-        mock_datetime.now.return_value.strftime.return_value = DUMMY_ID
-        UserInterface()
+    def test_new_register(self, mock_input) -> None:
         with open(f'{_PATH_DATA}/categories_{DUMMY_USER}.{categories_file_extension.value}') as f:
             categories = json.load(f)
 
@@ -76,7 +72,27 @@ class TestBookInitializer(TestCase):
         with self.subTest("Check comment"):
             self.assertEqual(register.comments, DUMMY_COMMENT)
 
-        UserInterface()
+        UserInterface()  # Delete data
+
+    @patch('builtins.input', side_effect=[
+        DUMMY_USER,  # Iniciamos sesión de nuevo
+        "3",  # Modify register
+        "1",  # Select category
+        DUMMY_DATE.split('-')[-1],
+        DUMMY_DATE.split('-')[1],
+        DUMMY_DATE.split('-')[0],
+        DUMMY_ID,
+        MODIFIED_DATE,
+        "1",  # Seleccionamos la categoría de gasto
+        MODIFIED_AMOUNT,
+        MODIFIED_COMMENT,
+        "10",  # Salimos de nuevo
+        DUMMY_USER,  # Iniciamos sesión de nuevo
+        "8",  # Eliminar datos de usuario
+        "2"  # Confirmar eliminación
+    ])
+    def test_edit_register(self, mock_input) -> None:
+        UserInterface()  # Edit register
 
         with open(f'{_PATH_DATA}/registers_{DUMMY_USER}.{registers_file_extension.value}', 'rb') as f:
             modified_register = pickle.load(f)[int(DUMMY_ID)]
@@ -91,7 +107,7 @@ class TestBookInitializer(TestCase):
         with self.subTest("Check modified comment"):
             self.assertEqual(modified_register.comments, MODIFIED_COMMENT)
 
-        UserInterface()
+        UserInterface()  # Delete data
 
 
 if __name__ == '__main__':

@@ -75,7 +75,7 @@ class AccountingBook:
             return []
 
     @staticmethod
-    def _save_to_file(data: list, file_name: str):
+    def _save_to_file(data: list, file_name: str) -> None:
         file_extension = FileExtensions.get_file_extension(file_name)
         match file_extension:
             case FileExtensions.PICKLE:
@@ -93,13 +93,13 @@ class AccountingBook:
             case _:
                 raise NotImplementedError(f"Dump method for file extension {file_extension} not implemented")
 
-    def new_register(self, date, category, amount, comments):
+    def new_register(self, date, category, amount, comments) -> None:
         new_registration = BookCell(self.user, date, category, amount, comments)
 
         self._data.update({new_registration.id: new_registration})
         print("¡Transacción añadida con éxito!")
 
-    def display_data(self, filters: dict):
+    def display_data(self, filters: dict) -> None:
         if not self._data:
             print("No hay transacciones registradas.")
         else:
@@ -129,19 +129,19 @@ class AccountingBook:
                     entry.display_data()
 
     def edit_register(self, register_id: int, new_date: datetime, new_category: str, new_amount: float,
-                      new_comments: str):
+                      new_comments: str) -> None:
         self._data[register_id].date = new_date
         self._data[register_id].category = new_category
         self._data[register_id].amount = new_amount
         self._data[register_id].comments = new_comments
 
-    def create_expense_category(self, new_category: str):
+    def create_expense_category(self, new_category: str) -> None:
         self._categories.append(new_category)
         self._save_to_file(self._categories, self._categories_file)
         print(f"La nueva categoría de gasto {new_category} ha sido añadida correctamente.")
 
     @staticmethod
-    def delete_user_data(user):
+    def delete_user_data(user) -> None:
         data_file = f"{FileIds.BOOK_FILE_PREFIX.value}{user}.{registers_file_extension.value}"
         categories_file = f"{FileIds.CATEGORIES_FILE_PREFIX.value}{user}.{categories_file_extension.value}"
         if not os.path.exists(f"{_DATA_PATH}/{data_file}"):
@@ -157,7 +157,7 @@ class AccountingBook:
               f"directorio de respaldo: {_BACKUP_PATH}")
 
     @staticmethod
-    def _restore_user_data(user):
+    def _restore_user_data(user) -> None:
         data_file = f"{FileIds.BOOK_FILE_PREFIX.value}{user}.{registers_file_extension.value}"
         categories_file = f"{FileIds.CATEGORIES_FILE_PREFIX.value}{user}.{categories_file_extension.value}"
         if not os.path.exists(f"{_BACKUP_PATH}/{data_file}"):
@@ -194,7 +194,7 @@ class BookCell:
     def id(self):
         return self._id
 
-    def display_data(self):
+    def display_data(self) -> None:
         print(f"\n---- ID del gasto: {self.id} ----\n")
         print(f"{RegisterHeaders.DATE.value}: {self.date.strftime(DateElements.FORMAT_DDMMYYYY.value)}")
         print(f"{RegisterHeaders.CATEGORY.value}: {self.category}")

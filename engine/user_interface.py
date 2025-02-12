@@ -5,7 +5,7 @@ from engine.accounting_book import AccountingBook
 from enums.engine_enums import RegisterHeaders, DateElements
 
 
-class UserInterface():
+class UserInterface:
 
     def __init__(self):
         self._categories = None
@@ -14,7 +14,7 @@ class UserInterface():
         self._menu()
 
     @staticmethod
-    def _user_login():
+    def _user_login() -> str:
         return input("Introduce tu nombre de usuario: ").strip()
 
     @staticmethod
@@ -73,7 +73,7 @@ class UserInterface():
                 print("Por favor, indica el número de una de las categorías de la lista.")
                 self._ask_category()
 
-    def _new_register(self):
+    def _new_register(self) -> None:
         print("Introduce los datos de la transacción:")
         date = UserInterface._ask_date()
         category = self._ask_category()
@@ -82,11 +82,11 @@ class UserInterface():
 
         self._active_book.new_register(date, category, amount, comments)
 
-    def _create_expense_category(self):
+    def _create_expense_category(self) -> None:
         category_label = input("Introduce el nombre de la nueva categoría de gasto: ")
         self._active_book.create_expense_category(category_label)
 
-    def _display_data(self):
+    def _display_data(self) -> None:
         category = self._ask_category()  # TODO: si no hay categorías preexistentes pregunta si quieres crear una nueva, lo cual no tiene sentido en esta función
         filters = {RegisterHeaders.CATEGORY: category}
 
@@ -109,7 +109,7 @@ class UserInterface():
                     filters.update({DateElements.MONTH: int(month), DateElements.DAY: int(day)})
                 self._active_book.display_data(filters=filters)
 
-    def _delete_user_data(self):
+    def _delete_user_data(self) -> None:
 
         print(f"Se procederá a eliminar los datos del usuario {self._user} y se cerrará la sesión. "
               f"¿Estás seguro/a de querer continuar?\n")
@@ -128,7 +128,7 @@ class UserInterface():
                 print("Respuesta no válida. Por favor, inténtalo de nuevo.\n")
                 self._delete_user_data()
 
-    def _edit_register(self):
+    def _edit_register(self) -> None:
         self._display_data()
         register_id = int(input("Pega aquí el ID del registro que deseas modificar: ").strip())
         print("Introduce los nuevos datos del registro.")
@@ -141,7 +141,7 @@ class UserInterface():
                                         new_comments=comments)
         print("¡Registro modificado con éxito!")
 
-    def _menu(self):
+    def _menu(self) -> None:
         while True:
             print("\n--- Gestor de Gastos ---")
             print("1. Añadir nuevo registro")
