@@ -21,8 +21,8 @@ class AccountingBook:
 
     def __init__(self, user, load_data: bool = False):
         self._user = user
-        self._data_file = f'registers_{self._user}.{registers_file_extension.value}'
-        self._categories_file = f'categories_{self._user}.{categories_file_extension.value}'
+        self._data_file = f'{FileIds.BOOK_FILE_PREFIX.value}{self._user}.{registers_file_extension.value}'
+        self._categories_file = f'{FileIds.CATEGORIES_FILE_PREFIX.value}{self._user}.{categories_file_extension.value}'
         if load_data:
             self._data = AccountingBook._load_book(self._user)
             self._categories = AccountingBook._load_categories(self._categories_file, self._user)
