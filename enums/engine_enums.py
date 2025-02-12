@@ -1,5 +1,6 @@
 from enum import Enum
 
+
 class Directories(Enum):
     DATA = "data"
     BACKUP = "backup"
@@ -11,9 +12,11 @@ class RegisterHeaders(Enum):
     AMOUNT = "Importe"
     COMMENT = "Comentarios"
 
+
 class FileIds(Enum):
     BOOK_FILE_PREFIX = "registers_"
     CATEGORIES_FILE_PREFIX = "categories_"
+
 
 class DateElements(Enum):
     YEAR = "Año"
@@ -23,13 +26,16 @@ class DateElements(Enum):
     FORMAT_YYYYMMDD = "%Y-%m-%d"
     FORMAT_DDMMYYYYHHMMSS = "%d-%m-%Y %H:%M:%S"
 
+
 class WriteMode(Enum):
     BINARY = "wb"
     TEXT = "w"
 
+
 class ReadMode(Enum):
     BINARY = "rb"
     TEXT = "r"
+
 
 class FileExtensions(Enum):
     PICKLE = "pickle"
