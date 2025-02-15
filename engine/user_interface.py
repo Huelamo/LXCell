@@ -147,7 +147,7 @@ class UserInterface:
             print("1. Añadir nuevo registro")
             print("2. Ver registros")
             print("3. Editar registro")  # TODO
-            print("4. Añadir categoría") # TODO
+            print("4. Añadir categoría")
             print("5. Editar categoría") # TODO
             print("6. Eliminar datos de usuario")
             print("7. Restaurar datos de usuario")  # TODO

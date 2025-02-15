@@ -41,10 +41,46 @@ class AccountingBook:
 
     @staticmethod
     def _load_book(user: str) -> dict:
+        register_file = f"{FileIds.BOOK_FILE_PREFIX.value}{user}.{FileExtensions.PICKLE.value}"
+        category_file = f"{FileIds.BOOK_FILE_PREFIX.value}{user}.{FileExtensions.JSON.value}"
+        register_load_method = get_load_method(register_file)
+        category_load_method = get_load_method(category_file)
+        register_read_mode = get_file_read_mode(register_file)
+        category_read_mode = get_file_read_mode(category_file)
+        
+
+        if os.path.exists(f'{_DATA_PATH}/{register_file}'):
+            file_name = register_file
+            with open(f'{_DATA_PATH}/{file_name}', register_read_mode.value) as input_file:
+                register_data = register_load_method(input_file)
+        elif os.path.exists(f'{_DATA_PATH}/{category_file}'):
+            file_name = category_file
+            with open(f'{_DATA_PATH}/{file_name}', category_read_mode.value) as input_file:
+                category_data = category_load_method(input_file)
+        else:
+            print(f"\nNo existen registros para el usuario {user}. ¿Qué deseas hacer?\n")
+            print("1. Crear un nuevo libro de cuentas")
+            print("2. Intentar recuperar datos borrados")
+            print("3. Salir")
+            answer = input("\nIntroduce tu respuesta: ")
+            match answer:
+                case "1":
+                    print("\nSe ha creado un nuevo libro de cuentas")
+                    return {}
+                case "2":
+                    print(f"\nComprobando la existencia de copias de seguridad del usuario '{user}'")
+                    AccountingBook._restore_user_data(user)
+                case "3":
+                    print("\nHas elegido cerrar sesión. ¡Hasta pronto!")
+            return {}
+
+    """@staticmethod
+    def _load_book(user: str) -> dict:
         file_name = f"{FileIds.BOOK_FILE_PREFIX.value}{user}.{registers_file_extension.value}"
         file_extension = FileExtensions.get_file_extension(file_name)
         load_method = get_load_method(file_extension)
         read_mode = get_file_read_mode(file_extension)
+        print(f'{_DATA_PATH}/{file_name}')
         try:
             with open(f'{_DATA_PATH}/{file_name}', read_mode.value) as input_file:
                 return load_method(input_file)
@@ -62,7 +98,7 @@ class AccountingBook:
                     print(f"\nComprobando la existencia de copias de seguridad del usuario '{user}'")
                     AccountingBook._restore_user_data(user)
                 case "3":
-                    print("\nHas elegido cerrar sesión. ¡Hasta pronto!")
+                    print("\nHas elegido cerrar sesión. ¡Hasta pronto!")"""
 
     @staticmethod
     def _load_categories(categories_file, user) -> list:
