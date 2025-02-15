@@ -40,13 +40,13 @@ class AccountingBook:
         return os.path.exists(f"{_DATA_PATH}/{FileIds.BOOK_FILE_PREFIX}{user}.{registers_file_extension.value}")
 
     @staticmethod
-    def _load_book(user: str) -> dict:
-        register_file = f"{FileIds.BOOK_FILE_PREFIX.value}{user}.{FileExtensions.PICKLE.value}"
-        category_file = f"{FileIds.BOOK_FILE_PREFIX.value}{user}.{FileExtensions.JSON.value}"
-        register_load_method = get_load_method(register_file)
-        category_load_method = get_load_method(category_file)
-        register_read_mode = get_file_read_mode(register_file)
-        category_read_mode = get_file_read_mode(category_file)
+    def _load_book(user: str) -> dict: # Checks whether the user has any data created. If not, it asks the user what to do
+        register_file = f"{FileIds.BOOK_FILE_PREFIX.value}{user}.{registers_file_extension.value}"
+        category_file = f"{FileIds.CATEGORIES_FILE_PREFIX.value}{user}.{categories_file_extension.value}"
+        register_load_method = get_load_method(registers_file_extension)
+        category_load_method = get_load_method(categories_file_extension)
+        register_read_mode = get_file_read_mode(registers_file_extension)
+        category_read_mode = get_file_read_mode(categories_file_extension)
         
 
         if os.path.exists(f'{_DATA_PATH}/{register_file}'):
@@ -73,6 +73,41 @@ class AccountingBook:
                 case "3":
                     print("\nHas elegido cerrar sesión. ¡Hasta pronto!")
             return {}
+
+    """def _load_book(user: str) -> dict:
+    files = [
+        (f"{FileIds.BOOK_FILE_PREFIX.value}{user}.{registers_file_extension.value}", registers_file_extension),
+        (f"{FileIds.CATEGORIES_FILE_PREFIX.value}{user}.{categories_file_extension.value}", categories_file_extension)
+    ]
+
+    for file_name, file_extension in files:
+        file_path = f'{_DATA_PATH}/{file_name}'
+        if os.path.exists(file_path):
+            load_method = get_load_method(file_extension)
+            read_mode = get_file_read_mode(file_extension)
+            with open(file_path, read_mode.value) as input_file:
+                return load_method(input_file)
+
+    print(f"\nNo existen registros para el usuario {user}. ¿Qué deseas hacer?\n")
+    print("1. Crear un nuevo libro de cuentas")
+    print("2. Intentar recuperar datos borrados")
+    print("3. Salir")
+    answer = input("\nIntroduce tu respuesta: ")
+    match answer:
+        case "1":
+            print("\nSe ha creado un nuevo libro de cuentas")
+            return {}
+        case "2":
+            print(f"\nComprobando la existencia de copias de seguridad del usuario '{user}'")
+            AccountingBook._restore_user_data(user)
+        case "3":
+            print("\nHas elegido cerrar sesión. ¡Hasta pronto!")
+    return {}"""
+
+
+
+    #########################################
+
 
     """@staticmethod
     def _load_book(user: str) -> dict:
