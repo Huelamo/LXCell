@@ -16,6 +16,38 @@ _BACKUP_PATH.mkdir(exist_ok=True)
 registers_file_extension = FileExtensions.PICKLE
 categories_file_extension = FileExtensions.JSON
 
+opciones = {
+    "G": "Gastos",
+    "I": "Ingresos"
+}
+
+class Category:
+    def __init__(self, category_label:str, category_type:str) -> None:
+        self._category_type = category_type
+        self._category_label = category_label
+
+    def label(self) -> str:
+        return self._category_label
+    
+    def to_dict(self) -> dict:
+        return {
+            'category_type': self._category_type,
+            'category_label': self._category_label
+        }
+    
+class Data:
+    def __init__(self):
+        self._data = {"Ingresos": [], "Gastos": []}
+        
+    def to_dict(self) -> dict:
+        return {
+            key: [category.label() for category in categories]
+            for key, categories in self._data.items()
+        }
+    
+    def add_category(self, category_type, category_label) :
+        self._data[category_type].append(Category(category_label, category_type))
+
 
 class AccountingBook:
 
@@ -26,6 +58,10 @@ class AccountingBook:
         if load_data:
             self._data = AccountingBook._load_book(self._user)
             self._categories = AccountingBook._load_categories(self._categories_file, self._user)
+        else:
+            self._categories = Data()
+            with open(self._data_file, "w") as file:
+                json.dump(self._categories.to_dict(),file, indent=4)
 
     @property
     def user(self):
@@ -75,7 +111,7 @@ class AccountingBook:
             return []
 
     @staticmethod
-    def _save_to_file(data: list, file_name: str) -> None:
+    def _save_to_file(data, file_name: str) -> None:
         file_extension = FileExtensions.get_file_extension(file_name)
         match file_extension:
             case FileExtensions.PICKLE:
@@ -135,10 +171,18 @@ class AccountingBook:
         self._data[register_id].amount = new_amount
         self._data[register_id].comments = new_comments
 
-    def create_expense_category(self, new_category: str) -> None:
-        self._categories.append(new_category)
-        self._save_to_file(self._categories, self._categories_file)
-        print(f"La nueva categoría de gasto {new_category} ha sido añadida correctamente.")
+    def create_category(self, category_label:str, category_type: str) -> None:
+        category_type=opciones[category_type]
+        new_category = Category(category_label,category_type)
+        self._categories.add_category(category_type, category_label)
+        categories_json = self._categories.to_dict()
+        
+        #{
+         #   key: [category.label() for category in categories]
+        #    for key, categories in self._categories.items()
+       # }
+        self._save_to_file(categories_json, self._categories_file)
+        print(f"La nueva categoría '{new_category.label()}' ha sido añadida correctamente.")
 
     @staticmethod
     def delete_user_data(user) -> None:
