@@ -135,10 +135,10 @@ class AccountingBook:
         self._data[register_id].amount = new_amount
         self._data[register_id].comments = new_comments
 
-    def create_expense_category(self, new_category: str) -> None:
+    def create_category(self, new_category: str) -> None:
         self._categories.append(new_category)
         self._save_to_file(self._categories, self._categories_file)
-        print(f"La nueva categoría de gasto {new_category} ha sido añadida correctamente.")
+        print(f"La nueva categoría {new_category} ha sido añadida correctamente.")
 
     @staticmethod
     def delete_user_data(user) -> None:

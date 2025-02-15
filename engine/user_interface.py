@@ -82,9 +82,9 @@ class UserInterface:
 
         self._active_book.new_register(date, category, amount, comments)
 
-    def _create_expense_category(self) -> None:
-        category_label = input("Introduce el nombre de la nueva categoría de gasto: ")
-        self._active_book.create_expense_category(category_label)
+    def _create_category(self) -> None:
+        category_label = input("Introduce el nombre de la nueva categoría: ")
+        self._active_book.create_category(category_label)
 
     def _display_data(self) -> None:
         category = self._ask_category()  # TODO: si no hay categorías preexistentes pregunta si quieres crear una nueva, lo cual no tiene sentido en esta función
@@ -147,13 +147,11 @@ class UserInterface:
             print("1. Añadir nuevo registro")
             print("2. Ver registros")
             print("3. Editar registro")  # TODO
-            print("4. Añadir categoría de gasto")
-            print("5. Añadir categoría de ingreso")  # TODO
-            print("6. Editar categoría de gasto")  # TODO
-            print("7. Editar categoría de ingreso")  # TODO
-            print("8. Eliminar datos de usuario")
-            print("9. Restaurar datos de usuario")  # TODO
-            print("10. Salir")
+            print("4. Añadir categoría") # TODO
+            print("5. Editar categoría") # TODO
+            print("6. Eliminar datos de usuario")
+            print("7. Restaurar datos de usuario")  # TODO
+            print("8. Salir")
 
             opcion = input("\nSelecciona una opción: ").strip()
 
@@ -167,19 +165,15 @@ class UserInterface:
                     self._edit_register()
                     AccountingBook._save_to_file(self._active_book._data, self._active_book._data_file)
                 case "4":
-                    self._create_expense_category()
+                    self._create_category()
                 case "5":
                     raise NotImplementedError("Lamentablemente, esta opción todavía no está implementada. Elige otra.")
                 case "6":
-                    raise NotImplementedError("Lamentablemente, esta opción todavía no está implementada. Elige otra.")
+                    self._delete_user_data()
+                    return
                 case "7":
                     raise NotImplementedError("Lamentablemente, esta opción todavía no está implementada. Elige otra.")
                 case "8":
-                    self._delete_user_data()
-                    return
-                case "9":
-                    raise NotImplementedError("Lamentablemente, esta opción todavía no está implementada. Elige otra.")
-                case "10":
                     print("¡Hasta luego!")
                     return
                 case _:
