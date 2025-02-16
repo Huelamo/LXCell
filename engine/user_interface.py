@@ -141,13 +141,16 @@ class UserInterface:
                                         new_comments=comments)
         print("¡Registro modificado con éxito!")
 
+    def _edit_category(self) -> None:
+        self._active_book.edit_category()
+
 
     def _menu(self) -> None:
         while True:
             print("\n--- Gestor de Gastos ---")
             print("1. Añadir nuevo registro")
             print("2. Ver registros")
-            print("3. Editar registro")  # TODO
+            print("3. Editar registro")
             print("4. Añadir categoría")
             print("5. Editar categoría") # TODO
             print("6. Eliminar datos de usuario")
@@ -168,7 +171,7 @@ class UserInterface:
                 case "4":
                     self._create_category()
                 case "5":
-                    raise NotImplementedError("Lamentablemente, esta opción todavía no está implementada. Elige otra.")
+                    self._edit_category()
                 case "6":
                     self._delete_user_data()
                     return

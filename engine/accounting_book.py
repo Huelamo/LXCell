@@ -140,6 +140,25 @@ class AccountingBook:
         self._save_to_file(self._categories, self._categories_file)
         print(f"La nueva categoría {new_category} ha sido añadida correctamente.")
 
+    def edit_category(self):
+        print(f"Indique la categoría a modificar:")
+        for index, category in enumerate(self._categories, start=1):
+            print(f"{index}. {category}")
+        index = int(input("Introduzca el número de la categoría a modificar: ")) - 1
+        print(f"Indique la opción a modificar:")
+        print("1. Cambiar nombre")
+        print("2. Eliminar categoría")
+        option = int(input("Introduzca el número de la opción a modificar: "))
+        match option:
+            case 1:
+                new_name = input("Introduzca el nuevo nombre de la categoría: ")
+                self._categories[index] = new_name                
+            case 2:
+                self._categories.pop(index)
+        self._save_to_file(self._categories, self._categories_file)
+        print(f"La categoría ha sido modificada correctamente.")
+        
+
     @staticmethod
     def delete_user_data(user) -> None:
         data_file = f"{FileIds.BOOK_FILE_PREFIX.value}{user}.{registers_file_extension.value}"
@@ -193,6 +212,10 @@ class BookCell:
     @property
     def id(self):
         return self._id
+    
+    @property
+    def bookcell_type(self):
+        return "G" if self.amount < 0 else "I"
 
     def display_data(self) -> None:
         print(f"\n---- ID del gasto: {self.id} ----\n")
