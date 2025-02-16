@@ -150,9 +150,9 @@ class UserInterface:
             print("\n--- Gestor de Gastos ---")
             print("1. Añadir nuevo registro")
             print("2. Ver registros")
-            print("3. Editar registro")
+            print("3. Modificar registro")
             print("4. Añadir categoría")
-            print("5. Editar categoría") # TODO
+            print("5. Modificar/eliminar categoría") # TODO
             print("6. Eliminar datos de usuario")
             print("7. Restaurar datos de usuario")  # TODO
             print("8. Salir")

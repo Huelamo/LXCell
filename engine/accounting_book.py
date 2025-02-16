@@ -154,7 +154,11 @@ class AccountingBook:
                 new_name = input("Introduzca el nuevo nombre de la categoría: ")
                 self._categories[index] = new_name                
             case 2:
-                self._categories.pop(index)
+                if len(self._categories) == 1:
+                    print("No puedes eliminar la única categoría existente.")
+                    return
+                else:
+                    self._categories.pop(index)
         self._save_to_file(self._categories, self._categories_file)
         print(f"La categoría ha sido modificada correctamente.")
         
