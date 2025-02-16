@@ -141,6 +141,7 @@ class UserInterface:
                                         new_comments=comments)
         print("¡Registro modificado con éxito!")
 
+
     def _menu(self) -> None:
         while True:
             print("\n--- Gestor de Gastos ---")
