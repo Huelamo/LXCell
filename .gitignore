@@ -3,3 +3,10 @@ venv/
 **/__pycache__/
 *.DS_Store
 data/
+
+# Real personal finance workbooks are historical source material.
+# Keep them out of git; use anonymized fixtures under tests/fixtures when needed.
+*.xlsx
+*.xls
+!tests/fixtures/**/*.xlsx
+!tests/fixtures/**/*.xls
