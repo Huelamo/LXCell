@@ -1,4 +1,4 @@
-# Agent Instructions For MyFinances
+# Agent Instructions For LXCell
 
 These instructions are for AI coding agents working in this repository. They are operational rules, not product documentation.
 

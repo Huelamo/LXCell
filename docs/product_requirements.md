@@ -1,10 +1,10 @@
-# MyFinances Product Requirements
+# LXCell Product Requirements
 
 Last updated: 2026-08-05
 
 ## Purpose
 
-MyFinances replaces yearly personal finance spreadsheets with a local, auditable application for transaction ingestion, categorization, budgeting, and financial review.
+LXCell replaces yearly personal finance spreadsheets with a local, auditable application for transaction ingestion, categorization, budgeting, and financial review.
 
 The project starts from existing yearly Excel workbooks and a small Python prototype. The target is not a one-to-one clone of the spreadsheet layout, but a scalable system that preserves the useful accounting logic behind it.
 
@@ -19,7 +19,7 @@ The project starts from existing yearly Excel workbooks and a small Python proto
 
 ## Users
 
-MyFinances should support multiple users or profiles over time.
+LXCell should support multiple users or profiles over time.
 
 Known use cases:
 

@@ -1,4 +1,4 @@
-# MyFinances Roadmap
+# LXCell Roadmap
 
 Last updated: 2026-08-05
 
@@ -55,7 +55,7 @@ Goals:
 
 Expected result:
 
-- MyFinances can replace the main review workflow currently done in Excel or Google Sheets.
+- LXCell can replace the main review workflow currently done in Excel or Google Sheets.
 
 ## Phase 4 - Statement Import
 
@@ -128,4 +128,4 @@ Goals:
 
 Expected result:
 
-- MyFinances becomes a review assistant, not just a register.
+- LXCell becomes a review assistant, not just a register.

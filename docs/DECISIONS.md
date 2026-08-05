@@ -1,6 +1,12 @@
-# MyFinances Decisions
+# LXCell Decisions
 
 This file records durable project decisions so future work can recover the reasoning without relying on conversation memory.
+
+## 2026-08-05 - Product And Repository Identity
+
+Decision: use `LXCell` as the project and local repository name going forward.
+
+Reason: the GitHub repository has moved to `Huelamo/LXCell`, and the local project folder has been renamed from `myFinances` to `LXCell`. Aligning documentation with the repository name avoids confusion in future work.
 
 ## 2026-08-05 - Preserve Pre-AI Code Baseline
 
