@@ -1,5 +1,7 @@
 from datetime import datetime
 import pandas as pd
+import tkinter as tk
+from tkinter import messagebox
 
 from engine.accounting_book import AccountingBook
 from enums.engine_enums import RegisterHeaders, DateElements
@@ -9,9 +11,36 @@ class UserInterface:
 
     def __init__(self):
         self._categories = None
+        #self._user = self._user_login()
+
+        # Crear la ventana de inicio de sesión
+        #login_window = LoginWindow()
+        #login_window.start()
+        #self._user = login_window.username
         self._user = self._user_login()
-        self._active_book = AccountingBook(user=self._user, load_data=True)
+        self._active_book = AccountingBook(user=self._user, load_data=False)
+        if AccountingBook.check_existing_registers(self._user):
+            self._active_book.load_book()
+        else:
+            self._new_user_menu()
         self._menu()
+
+    def _new_user_menu(self):
+        print(f"\nNo existen registros para el usuario {self._user}. ¿Qué deseas hacer?\n")
+        print("1. Crear un nuevo libro de cuentas")
+        print("2. Intentar recuperar datos borrados")
+        print("3. Salir")
+        answer = input("\nIntroduce tu respuesta: ")
+        match answer:
+            case "1":
+                self._active_book.new_book()
+                print("\nSe ha creado un nuevo libro de cuentas")
+            case "2":
+                print(f"\nComprobando la existencia de copias de seguridad del usuario '{self._user}'")
+                AccountingBook._restore_user_data(self._user)
+            case "3":
+                print("\nHas elegido cerrar sesión. ¡Hasta pronto!")
+                raise SystemExit
 
     @staticmethod
     def _user_login() -> str:
@@ -181,7 +210,43 @@ class UserInterface:
                     raise NotImplementedError("Lamentablemente, esta opción todavía no está implementada. Elige otra.")
                 case "10":
                     print("¡Hasta luego!")
-                    return
+                    raise SystemExit
                 case _:
                     print("Opción no válida. Intenta nuevamente.")
                     self._menu()
+
+
+class LoginWindow:
+    def __init__(self):
+        self._root = tk.Tk()
+        self._root.title("Inicio de Sesión")  # TODO: encode enum
+        self._username_entry = None
+        self._username = ""
+        self._create_widgets()
+    @property
+    def username(self):
+        return self._username
+
+    def start(self):
+        self._root.mainloop()
+
+    def _create_widgets(self):
+        # Etiqueta y campo para el nombre de usuario
+        tk.Label(self._root, text="Nombre de usuario:").grid(row=0, column=0, padx=10, pady=10)
+        self._username_entry = tk.Entry(self._root)
+        self._username_entry.grid(row=0, column=1, padx=10, pady=10)
+
+        # Botón para iniciar sesión
+        tk.Button(self._root, text="Iniciar Sesión", command=self._on_login_click).grid(row=1, column=0, columnspan=2, pady=10)
+
+    def _on_login_click(self):
+        """Manejar el evento de clic en el botón 'Iniciar Sesión'."""
+        self._username = self._username_entry.get().strip()  # Obtener el nombre de usuario
+
+        # Verificar si el campo está vacío
+        if not self._username:
+            messagebox.showwarning("Error", "El nombre de usuario no puede estar vacío.")
+        else:
+            print(f"Usuario '{self._username}' ha iniciado sesión.")  # Aquí puedes agregar la lógica de inicio de sesión
+            self._root.destroy()  # Cerrar la ventana de login
+

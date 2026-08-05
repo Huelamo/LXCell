@@ -5,7 +5,6 @@ from datetime import datetime
 from pathlib import Path
 import pickle
 from typing import Callable
-
 from enums.engine_enums import RegisterHeaders, FileIds, DateElements, ReadMode, WriteMode, FileExtensions, Directories
 
 # Archivo donde se almacenarán los datos
@@ -23,8 +22,10 @@ class AccountingBook:
         self._user = user
         self._data_file = f'{FileIds.BOOK_FILE_PREFIX.value}{self._user}.{registers_file_extension.value}'
         self._categories_file = f'{FileIds.CATEGORIES_FILE_PREFIX.value}{self._user}.{categories_file_extension.value}'
+        self._data = None
+        self._categories = None
         if load_data:
-            self._data = AccountingBook._load_book(self._user)
+            self._data = AccountingBook.load_book(self._user)
             self._categories = AccountingBook._load_categories(self._categories_file, self._user)
 
     @property
@@ -36,33 +37,22 @@ class AccountingBook:
         return self._categories
 
     @staticmethod
-    def _check_existing_registers(user: str):
+    def check_existing_registers(user: str):
         return os.path.exists(f"{_DATA_PATH}/{FileIds.BOOK_FILE_PREFIX}{user}.{registers_file_extension.value}")
 
+    def new_book(self):
+        self._data = {}
+
     @staticmethod
-    def _load_book(user: str) -> dict:
+    def load_book(user: str) -> dict:
         file_name = f"{FileIds.BOOK_FILE_PREFIX.value}{user}.{registers_file_extension.value}"
         file_extension = FileExtensions.get_file_extension(file_name)
         load_method = get_load_method(file_extension)
         read_mode = get_file_read_mode(file_extension)
-        try:
-            with open(f'{_DATA_PATH}/{file_name}', read_mode.value) as input_file:
-                return load_method(input_file)
-        except FileNotFoundError:
-            print(f"\nNo existen registros para el usuario {user}. ¿Qué deseas hacer?\n")
-            print("1. Crear un nuevo libro de cuentas")
-            print("2. Intentar recuperar datos borrados")
-            print("3. Salir")
-            answer = input("\nIntroduce tu respuesta: ")
-            match answer:
-                case "1":
-                    print("\nSe ha creado un nuevo libro de cuentas")
-                    return {}
-                case "2":
-                    print(f"\nComprobando la existencia de copias de seguridad del usuario '{user}'")
-                    AccountingBook._restore_user_data(user)
-                case "3":
-                    print("\nHas elegido cerrar sesión. ¡Hasta pronto!")
+
+        with open(f'{_DATA_PATH}/{file_name}', read_mode.value) as input_file:
+            return load_method(input_file)
+
 
     @staticmethod
     def _load_categories(categories_file, user) -> list:
