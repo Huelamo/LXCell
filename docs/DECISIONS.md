@@ -53,3 +53,43 @@ Current leaning: SQLite for the first serious local version because it is free, 
 Decision: user-facing interface text should be in Spanish; code, comments, internal names, and tests should be in English.
 
 Reason: this keeps the application comfortable for Spanish-speaking users while preserving conventional code readability.
+
+## 2026-08-13 - Normalized Transaction Model
+
+Decision: design LXCell around a normalized transaction model instead of reproducing the yearly spreadsheet layout directly.
+
+Reason: one row per day with categories as columns does not scale for imported bank statements, multiple accounts, duplicate detection, transaction-level auditability, or user review workflows.
+
+Implication: historical Excel workbooks should be imported read-only and converted into one transaction per financial movement, with category mappings and validation against existing spreadsheet totals.
+
+## 2026-08-13 - Public Repository Privacy
+
+Decision: documentation, examples, tests, fixtures, comments, and commit messages must avoid personal or sensitive financial details because the repository is public.
+
+Reason: project documentation should preserve product and architecture intent without exposing real people, family relationships, account purposes, financial institutions tied to personal usage, merchants, statement filenames, amounts, debts, salary details, or raw exports.
+
+Implication: use anonymized placeholders such as `Primary user`, `Shared account`, `Bank A`, and `Merchant A`. Real financial institutions may appear only when describing generic integrations or adapters, not the user's personal financial setup.
+
+## 2026-08-13 - Phase 1 Persistence Stack
+
+Decision: use SQLite with SQLAlchemy 2.x for the Phase 1 implementation.
+
+Reason: SQLite keeps LXCell local, free, portable, and easy to back up. SQLAlchemy provides a structured Python layer for tables, relationships, and repositories while keeping the storage engine lightweight.
+
+Implication: Alembic remains deferred until schema migrations become necessary. Initial tests and local development can create the schema from SQLAlchemy metadata.
+
+## 2026-08-13 - Transaction Amount Representation
+
+Decision: store `amount_minor` as a non-negative integer and use `direction` to represent inflow or outflow.
+
+Reason: integer minor units avoid floating point drift, and an explicit direction field makes statement imports easier to normalize across source formats.
+
+Implication: reports and calculations must combine `amount_minor` with `direction`; they must not assume signed stored amounts.
+
+## 2026-08-13 - Phase 1 Minimum Schema Scope
+
+Decision: the first implementation schema should include `user_profiles`, `accounts`, `categories`, `transactions`, `import_batches`, `imported_transaction_sources`, `classification_rules`, `classification_decisions`, `budgets`, and `budget_lines`.
+
+Reason: this keeps the first version small enough to understand and review while still supporting transaction imports, basic categorization, budgets, and auditability.
+
+Implication: `transaction_splits`, `transfer_links`, `savings_goals`, `merchants`, `category_mappings`, `excel_workbook_imports`, and `import_validation_issues` are deferred from the first schema. `merchants` remain a planned concept for automation and should be revisited before classification automation grows beyond simple description-based rules.

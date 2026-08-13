@@ -1,6 +1,6 @@
 # LXCell Product Requirements
 
-Last updated: 2026-08-05
+Last updated: 2026-08-13
 
 ## Purpose
 
@@ -24,7 +24,7 @@ LXCell should support multiple users or profiles over time.
 Known use cases:
 
 - The primary user manages personal finances in yearly workbooks.
-- The primary user also prepares a finance workbook for his mother.
+- The primary user may manage separate finance workspaces for trusted people.
 - Friends and family are interested in a solution that avoids hours of manual transaction entry.
 
 Each user profile should keep categories, budgets, accounts, import history, and transaction data isolated.
@@ -32,11 +32,11 @@ Each user profile should keep categories, budgets, accounts, import history, and
 ## Financial Scope
 
 - Primary currency: EUR.
-- Non-EUR spending occurs mainly while traveling and is paid through Revolut.
-- Priority bank sources:
-  - Revolut personal account.
-  - Shared Revolut account with Maria.
-  - ING account for lower-volume but high-impact expenses such as rent, mortgage, and utilities.
+- Non-EUR spending may occur while traveling and should be preserved with source currency metadata when available.
+- Priority statement sources:
+  - A high-volume personal card or current account.
+  - A high-volume shared account.
+  - A lower-volume account containing larger recurring expenses.
 - The 2026 category structure is canonical for future work, even if this makes year-over-year comparisons harder.
 - Earlier category structures should be mapped into the 2026 structure during migration where appropriate.
 
@@ -58,8 +58,8 @@ The first automation target is user-provided bank statement import.
 The system should:
 
 - Import bank statements supplied by the user.
-- Start with Revolut personal and shared Revolut exports.
-- Add ING after Revolut import is stable.
+- Start with the most active personal and shared statement exports.
+- Add lower-volume statement sources after the first importer is stable.
 - Detect duplicate transactions across repeated imports.
 - Keep original import metadata for auditability.
 - Learn deterministic classification rules from historical classification patterns.
@@ -95,5 +95,5 @@ Current technical leaning: SQLite for the first serious local version because it
 - Confirm whether Streamlit remains the best UI stack after the first prototype.
 - Confirm whether SQLite is sufficient for the first production-grade local version.
 - Define the exact 2026 category list and category mapping from older workbooks.
-- Obtain anonymized sample exports for Revolut personal, Revolut shared, and ING.
+- Obtain anonymized sample exports for the first personal, shared, and lower-volume statement sources.
 - Decide how to represent shared expenses and household accounts.
