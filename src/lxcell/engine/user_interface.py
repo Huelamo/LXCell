@@ -1,8 +1,8 @@
 from datetime import datetime
 import pandas as pd
 
-from engine.accounting_book import AccountingBook
-from enums.engine_enums import RegisterHeaders, DateElements
+from lxcell.engine.accounting_book import AccountingBook
+from lxcell.enums.engine_enums import RegisterHeaders, DateElements
 
 
 class UserInterface:

@@ -6,10 +6,10 @@ from pathlib import Path
 import pickle
 from typing import Callable
 
-from enums.engine_enums import RegisterHeaders, FileIds, DateElements, ReadMode, WriteMode, FileExtensions, Directories
+from lxcell.enums.engine_enums import RegisterHeaders, FileIds, DateElements, ReadMode, WriteMode, FileExtensions, Directories
 
 # Archivo donde se almacenarán los datos
-_DATA_PATH = Path(__file__).resolve().parent.parent / Directories.DATA.value
+_DATA_PATH = Path(__file__).resolve().parents[3] / Directories.DATA.value
 _DATA_PATH.mkdir(exist_ok=True)
 _BACKUP_PATH = _DATA_PATH / Directories.BACKUP.value
 _BACKUP_PATH.mkdir(exist_ok=True)

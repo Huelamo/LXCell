@@ -93,3 +93,27 @@ Decision: the first implementation schema should include `user_profiles`, `accou
 Reason: this keeps the first version small enough to understand and review while still supporting transaction imports, basic categorization, budgets, and auditability.
 
 Implication: `transaction_splits`, `transfer_links`, `savings_goals`, `merchants`, `category_mappings`, `excel_workbook_imports`, and `import_validation_issues` are deferred from the first schema. `merchants` remain a planned concept for automation and should be revisited before classification automation grows beyond simple description-based rules.
+
+## 2026-08-17 - Phase 1 Package Structure
+
+Decision: use `src/lxcell/` as the main application package. Keep the existing prototype code under `src/lxcell/engine/` and existing enums under `src/lxcell/enums/` during Phase 1.
+
+Reason: the `src` layout makes the new package explicit while keeping legacy prototype code available during the transition.
+
+Implication: new Phase 1 code should live beside, not inside, the legacy engine. The legacy engine remains preserved until replacement behavior is implemented and reviewed.
+
+## 2026-08-17 - Persistence Layer Naming
+
+Decision: use `src/lxcell/db/` for SQLAlchemy infrastructure and ORM model definitions, and `src/lxcell/repositories/` for persistence operations used by application services.
+
+Reason: `db/` describes database mechanics such as SQLAlchemy base classes, engines, sessions, and table mappings. `repositories/` describes the application's data access layer in business terms, without exposing SQLAlchemy details to services and UI code.
+
+Implication: application services should depend on repositories rather than directly constructing SQLAlchemy queries unless a future design review changes this boundary.
+
+## 2026-08-17 - ORM As Initial Domain Model
+
+Decision: use SQLAlchemy ORM classes as the main Phase 1 accounting model for now.
+
+Reason: this avoids duplicating financial concepts across separate domain and persistence classes while the model is still small and actively evolving.
+
+Implication: separating pure business-domain classes from ORM classes remains an open future option if LXCell needs stricter business invariants, easier non-database testing, or a cleaner persistence boundary.
