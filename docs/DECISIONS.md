@@ -167,3 +167,11 @@ Decision: Phase 1 classification rules should only suggest classifications. `Cla
 Reason: auditability is more important than aggressive automation. Keeping rule output in append-only decision records preserves why a transaction was classified without hiding uncertainty.
 
 Implication: `auto_apply` is included as a future extension point but remains false in Phase 1 behavior. Merchant-based classification rules are deferred until merchant normalization is introduced.
+
+## 2026-08-17 - Phase 1 Budget Scope
+
+Decision: Phase 1 budgets should support `monthly` and `annual` periods. `Budget.name` should be unique per user profile. `BudgetLine` should be unique by `budget_id` and `category_id`, and budget lines should be allowed for expense, income, saving, and investment categories.
+
+Reason: income, savings, and investments are part of the basic budgeting workflow, not later reporting extras. Unique budget lines avoid ambiguous planned amounts for the same category inside one budget.
+
+Implication: keep `rollover_policy` in the schema, but only `none` is supported in Phase 1 behavior. Additional rollover policies remain open for later design.

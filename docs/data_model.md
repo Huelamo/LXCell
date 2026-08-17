@@ -350,6 +350,7 @@ Key fields:
 - `start_date`
 - `end_date`
 - `currency`
+- `is_active`
 - `created_at`
 - `updated_at`
 
@@ -357,12 +358,13 @@ Suggested `period_type` values:
 
 - `monthly`
 - `annual`
-- `custom`
 
 Rules:
 
 - Budgets belong to one user profile.
 - Annual budgets can be converted into monthly expectations for reporting.
+- `Budget.name` should be unique within a user profile in Phase 1.
+- `custom` periods are deferred from Phase 1.
 
 ### BudgetLine
 
@@ -382,13 +384,15 @@ Key fields:
 Suggested `rollover_policy` values:
 
 - `none`
-- `carry_over_remaining`
-- `carry_over_overspend`
 
 Rules:
 
-- Phase 1 can implement `none` only.
+- Keep `rollover_policy` in the Phase 1 schema, but leave concrete policies beyond `none` for later design.
+- Phase 1 behavior can support `none` only.
+- `BudgetLine` should be unique by `budget_id` and `category_id`.
+- `amount_minor` must be non-negative.
 - Budget lines should preserve the distinction between expenses, income, savings, and investments.
+- Budget lines are allowed for expense, income, saving, and investment categories in Phase 1.
 
 ### SavingsGoal
 

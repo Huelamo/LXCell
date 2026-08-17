@@ -15,10 +15,10 @@ Accepted blocks:
 - Block 3: `Transaction`.
 - Block 4: import traceability entities.
 - Block 5: classification rules and decisions.
+- Block 6: budgets and budget lines.
 
 Pending blocks:
 
-- `Budget` and `BudgetLine`.
 - Final enum list.
 - Final SQLAlchemy implementation details and tests.
 
@@ -521,8 +521,100 @@ Accepted behavior:
 - User corrections should supersede prior decisions instead of deleting them.
 - AI suggestions should never be indistinguishable from user-confirmed records.
 
+## Block 6 - Budget
+
+Accepted fields:
+
+- `id`
+- `user_profile_id`
+- `name`
+- `period_type`
+- `start_date`
+- `end_date`
+- `currency`
+- `is_active`
+- `created_at`
+- `updated_at`
+
+Accepted relationship rules:
+
+- `Budget.user_profile_id` points to `UserProfile.id`.
+- One `UserProfile` can have many budgets.
+- One `Budget` belongs to exactly one `UserProfile`.
+
+Accepted `period_type` values for Phase 1:
+
+- `monthly`
+- `annual`
+
+Deferred:
+
+- `custom` budget periods are deferred from Phase 1.
+
+Accepted nullable rules:
+
+- `start_date` is required.
+- `end_date` is required.
+- `currency` is required.
+- `is_active` is required and defaults to true.
+
+Accepted constraints:
+
+- `Budget.name` should be unique per `user_profile_id`.
+- `currency` length is 3.
+
+Accepted behavior:
+
+- Annual budgets can be converted into monthly expectations for reporting.
+- Inactive budgets remain stored for audit/history but should be hidden from normal active-budget workflows.
+
+## Block 6 - BudgetLine
+
+Accepted fields:
+
+- `id`
+- `budget_id`
+- `category_id`
+- `amount_minor`
+- `rollover_policy`
+- `notes`
+- `created_at`
+- `updated_at`
+
+Accepted relationship rules:
+
+- `BudgetLine.budget_id` points to `Budget.id`.
+- `BudgetLine.category_id` points to `Category.id`.
+- A budget can have many budget lines.
+- One budget line belongs to exactly one budget and one category.
+- Budget line category ownership must remain synchronized with the budget user profile where practical.
+
+Accepted category scope:
+
+- Budget lines are allowed for expense, income, saving, and investment categories in Phase 1.
+- Reports should separate meaning by `Category.category_type` rather than restricting budget lines to expenses only.
+
+Accepted `rollover_policy` approach:
+
+- Keep `rollover_policy` in the Phase 1 schema.
+- Define only `none` as supported Phase 1 behavior.
+- Leave additional policies open for future design because multiple rollover alternatives will be needed later.
+
+Accepted `rollover_policy` values for Phase 1 behavior:
+
+- `none`
+
+Accepted nullable rules:
+
+- `category_id` is required.
+- `notes` is nullable.
+
+Accepted constraints:
+
+- `BudgetLine` should be unique by `budget_id` and `category_id`.
+- `amount_minor >= 0`.
+
 ## Open Questions For Later Blocks
 
-- Whether `Budget.period_type` should support only monthly and annual in Phase 1 or include custom from the beginning.
-- Whether `BudgetLine` should have rollover fields in Phase 1 or defer rollover behavior.
 - Exact repository and service methods after ORM classes are accepted.
+- Additional `rollover_policy` alternatives beyond `none`.
