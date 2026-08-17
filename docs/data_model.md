@@ -536,7 +536,6 @@ Represents a deterministic rule used to classify transactions.
 Examples:
 
 - Description contains `GROCERY_STORE_A` -> `Supermercado`.
-- Merchant is `INSURANCE_PROVIDER_A` -> the relevant canonical category.
 - Monthly recurring employer payment -> `Nómina`.
 
 Key fields:
@@ -545,12 +544,17 @@ Key fields:
 - `user_profile_id`
 - `name`
 - `rule_type`
+- `match_field`
 - `pattern`
-- `merchant_id`
 - `category_id`
 - `transaction_type`
+- `payment_method`
+- `direction`
+- `amount_min_minor`
+- `amount_max_minor`
 - `priority`
 - `confidence`
+- `auto_apply`
 - `is_active`
 - `created_at`
 - `updated_at`
@@ -559,17 +563,23 @@ Suggested `rule_type` values:
 
 - `description_contains`
 - `description_regex`
-- `merchant_default`
 - `amount_and_description`
 - `recurring_transaction`
 - `historical_match`
+
+Suggested `match_field` values:
+
+- `description_raw`
+- `description_clean`
 
 Rules:
 
 - Rules must be user-profile scoped.
 - Higher-priority rules run first.
 - Rule output should create a `ClassificationDecision`, not silently overwrite a transaction.
-- Rules should not auto-confirm ambiguous transactions.
+- Phase 1 classification rules should suggest classifications only. They should not automatically confirm transactions.
+- `auto_apply` should remain false in Phase 1. It is included as an explicit future extension point.
+- Merchant-based rules are deferred until merchant normalization is introduced.
 
 ### ClassificationDecision
 
@@ -580,10 +590,12 @@ Key fields:
 - `id`
 - `transaction_id`
 - `category_id`
+- `transaction_type`
+- `payment_method`
 - `decision_source`
 - `classification_rule_id`
 - `confidence`
-- `review_status`
+- `decision_status`
 - `decided_by`
 - `decided_at`
 - `superseded_at`
@@ -597,10 +609,18 @@ Suggested `decision_source` values:
 - `ai_suggestion`
 - `import_default`
 
+Suggested `decision_status` values:
+
+- `suggested`
+- `accepted`
+- `rejected`
+- `superseded`
+
 Rules:
 
 - Each classification attempt should be append-only.
 - The active transaction category should reflect the latest non-superseded accepted decision.
+- Classification decisions can suggest or accept `category_id`, `transaction_type`, and `payment_method`.
 - User corrections should supersede prior decisions instead of deleting them.
 - AI suggestions should never be indistinguishable from user-confirmed records.
 

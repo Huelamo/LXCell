@@ -159,3 +159,11 @@ Decision: accepted design decisions should be recorded proactively in repository
 Reason: LXCell is a long-running project with detailed financial and architectural decisions. Relying on conversation memory alone risks losing nuance across sessions, context compaction, model changes, or future agents.
 
 Implication: `docs/DECISIONS.md` should keep concise durable summaries, detailed review documents should capture field-level rationale and alternatives, and living design documents should be updated when decisions change the intended implementation. Documentation should remain structured and privacy-safe rather than trying to preserve every conversational sentence.
+
+## 2026-08-17 - Phase 1 Classification Traceability
+
+Decision: Phase 1 classification rules should only suggest classifications. `ClassificationRule` should include `match_field`; `ClassificationDecision` should be able to record suggested or accepted `category_id`, `transaction_type`, and `payment_method`.
+
+Reason: auditability is more important than aggressive automation. Keeping rule output in append-only decision records preserves why a transaction was classified without hiding uncertainty.
+
+Implication: `auto_apply` is included as a future extension point but remains false in Phase 1 behavior. Merchant-based classification rules are deferred until merchant normalization is introduced.

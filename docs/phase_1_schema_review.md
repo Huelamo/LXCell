@@ -14,10 +14,10 @@ Accepted blocks:
 - Block 2: `UserProfile`, `Account`, and `Category`.
 - Block 3: `Transaction`.
 - Block 4: import traceability entities.
+- Block 5: classification rules and decisions.
 
 Pending blocks:
 
-- `ClassificationRule` and `ClassificationDecision`.
 - `Budget` and `BudgetLine`.
 - Final enum list.
 - Final SQLAlchemy implementation details and tests.
@@ -396,10 +396,133 @@ Accepted relationship rules:
 - One `ImportedTransactionSource` can create zero or one `Transaction`.
 - One source record should create at most one transaction.
 
+## Block 5 - ClassificationRule
+
+Accepted fields:
+
+- `id`
+- `user_profile_id`
+- `name`
+- `rule_type`
+- `match_field`
+- `pattern`
+- `category_id`
+- `transaction_type`
+- `payment_method`
+- `direction`
+- `amount_min_minor`
+- `amount_max_minor`
+- `priority`
+- `confidence`
+- `auto_apply`
+- `is_active`
+- `created_at`
+- `updated_at`
+
+Accepted relationship rules:
+
+- `ClassificationRule.user_profile_id` points to `UserProfile.id`.
+- `ClassificationRule.category_id` points to `Category.id` and is nullable if a rule only suggests non-category metadata.
+- Rule category ownership must remain synchronized with `user_profile_id` where practical.
+
+Accepted `rule_type` values:
+
+- `description_contains`
+- `description_regex`
+- `amount_and_description`
+- `recurring_transaction`
+- `historical_match`
+
+Accepted `match_field` values:
+
+- `description_raw`
+- `description_clean`
+
+Accepted nullable rules:
+
+- `category_id` is nullable.
+- `transaction_type` is nullable.
+- `payment_method` is nullable.
+- `direction` is nullable.
+- `amount_min_minor` is nullable.
+- `amount_max_minor` is nullable.
+
+Accepted behavior:
+
+- Phase 1 classification rules should only suggest classifications.
+- `auto_apply` is included as a future extension point but should remain false in Phase 1 behavior.
+- Rule output should create a `ClassificationDecision`.
+- Rule output should not silently overwrite a transaction.
+- Rule output should not auto-confirm a transaction in Phase 1.
+- Higher `priority` rules should run before lower `priority` rules.
+- `confidence` represents the expected confidence of the rule output.
+
+Deferred:
+
+- Merchant-based rules are deferred until merchant normalization is introduced.
+- `merchant_id` should not be part of the Phase 1 `ClassificationRule` schema.
+
+## Block 5 - ClassificationDecision
+
+Accepted fields:
+
+- `id`
+- `transaction_id`
+- `category_id`
+- `transaction_type`
+- `payment_method`
+- `decision_source`
+- `classification_rule_id`
+- `confidence`
+- `decision_status`
+- `decided_by`
+- `decided_at`
+- `superseded_at`
+- `notes`
+
+Accepted relationship rules:
+
+- `ClassificationDecision.transaction_id` points to `Transaction.id`.
+- `ClassificationDecision.category_id` points to `Category.id` and is nullable.
+- `ClassificationDecision.classification_rule_id` points to `ClassificationRule.id` and is nullable.
+- A manual decision can exist without a linked classification rule.
+- A rule-based decision should link to the rule that produced it.
+
+Accepted nullable rules:
+
+- `category_id` is nullable when a decision only concerns `transaction_type` or `payment_method`.
+- `transaction_type` is nullable.
+- `payment_method` is nullable.
+- `classification_rule_id` is nullable.
+- `superseded_at` is nullable until a later decision replaces this one.
+- `notes` is nullable.
+
+Accepted `decision_source` values:
+
+- `manual_user`
+- `deterministic_rule`
+- `historical_match`
+- `ai_suggestion`
+- `import_default`
+
+Accepted `decision_status` values:
+
+- `suggested`
+- `accepted`
+- `rejected`
+- `superseded`
+
+Accepted behavior:
+
+- Every classification attempt should create an append-only decision record.
+- Classification decisions can suggest or accept `category_id`, `transaction_type`, and `payment_method`.
+- `auto_classified`, `user_corrected`, and `ai_suggestion` do not belong in `Transaction.review_status`.
+- The active transaction values should reflect the latest accepted non-superseded decision.
+- User corrections should supersede prior decisions instead of deleting them.
+- AI suggestions should never be indistinguishable from user-confirmed records.
+
 ## Open Questions For Later Blocks
 
-- Exact `ClassificationRule` fields and enum values.
-- Exact `ClassificationDecision` fields, including how to represent deterministic rules, historical matches, AI suggestions, and user corrections.
 - Whether `Budget.period_type` should support only monthly and annual in Phase 1 or include custom from the beginning.
 - Whether `BudgetLine` should have rollover fields in Phase 1 or defer rollover behavior.
 - Exact repository and service methods after ORM classes are accepted.
