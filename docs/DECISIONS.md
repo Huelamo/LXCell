@@ -175,3 +175,11 @@ Decision: Phase 1 budgets should support `monthly` and `annual` periods. `Budget
 Reason: income, savings, and investments are part of the basic budgeting workflow, not later reporting extras. Unique budget lines avoid ambiguous planned amounts for the same category inside one budget.
 
 Implication: keep `rollover_policy` in the schema, but only `none` is supported in Phase 1 behavior. Additional rollover policies remain open for later design.
+
+## 2026-08-17 - Phase 1 Enum Implementation
+
+Decision: require Python 3.11+ and implement new Phase 1 enums with standard-library `StrEnum` in `src/lxcell/enums/core_enums.py`.
+
+Reason: `StrEnum` behaves like strings, which keeps DataFrame handling and serialization cleaner than `str, Enum` patterns that often require explicit `.value` access.
+
+Implication: CI should run on Python 3.11+. Keep `TransactionSourceType` and `ImportSourceSystem` separate because transaction origin and import source system are related but distinct concepts. `PaymentMethod` includes `peer_to_peer` for app-based person-to-person payments.

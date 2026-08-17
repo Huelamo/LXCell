@@ -16,10 +16,10 @@ Accepted blocks:
 - Block 4: import traceability entities.
 - Block 5: classification rules and decisions.
 - Block 6: budgets and budget lines.
+- Block 7: Phase 1 enums.
 
 Pending blocks:
 
-- Final enum list.
 - Final SQLAlchemy implementation details and tests.
 
 ## Block 1 - Cross-Table Schema Conventions
@@ -256,6 +256,7 @@ Accepted `payment_method` values:
 
 - `card`
 - `bank_transfer`
+- `peer_to_peer`
 - `direct_debit`
 - `cash`
 - `standing_order`
@@ -618,3 +619,60 @@ Accepted constraints:
 
 - Exact repository and service methods after ORM classes are accepted.
 - Additional `rollover_policy` alternatives beyond `none`.
+
+## Block 7 - Phase 1 Enums
+
+Accepted implementation:
+
+- Use Python 3.11+.
+- Use standard-library `StrEnum` for new Phase 1 enums.
+- Store enum values as snake_case strings.
+- Keep all new Phase 1 enums in `src/lxcell/enums/core_enums.py` initially.
+- Split enum files later only if the single file becomes hard to navigate.
+
+Rationale:
+
+- `StrEnum` members behave like strings, which makes DataFrame handling and serialization less noisy than plain `Enum` values that require frequent `.value` access.
+- Requiring Python 3.11+ is acceptable for LXCell at this stage.
+
+Accepted enum classes:
+
+- `AccountType`
+- `OwnershipType`
+- `CategoryType`
+- `Direction`
+- `TransactionType`
+- `PaymentMethod`
+- `TransactionReviewStatus`
+- `TransactionSourceType`
+- `ImportSourceSystem`
+- `ImportStatus`
+- `ImportAction`
+- `ClassificationRuleType`
+- `ClassificationMatchField`
+- `ClassificationDecisionSource`
+- `ClassificationDecisionStatus`
+- `BudgetPeriodType`
+- `RolloverPolicy`
+
+Accepted `PaymentMethod` values:
+
+- `card`
+- `bank_transfer`
+- `peer_to_peer`
+- `direct_debit`
+- `cash`
+- `standing_order`
+- `other`
+
+Accepted source distinction:
+
+- Keep `TransactionSourceType` separate from `ImportSourceSystem`.
+- `TransactionSourceType` describes the general origin of a transaction.
+- `ImportSourceSystem` describes the concrete source system or file type of an import batch.
+
+Accepted account type clarifications:
+
+- `checking` represents a bank current account.
+- `cash` represents physical cash or a manual cash wallet.
+- `loan` remains a valid account type because liabilities can be represented as accounts.

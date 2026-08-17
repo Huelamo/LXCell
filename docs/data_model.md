@@ -264,6 +264,7 @@ Suggested `payment_method` values:
 
 - `card`
 - `bank_transfer`
+- `peer_to_peer`
 - `direct_debit`
 - `cash`
 - `standing_order`
