@@ -35,6 +35,16 @@ Before making project changes, read:
 - Before creating or reorganizing packages, classes, methods, database tables, services, or public APIs, explain the intended design and wait for user approval unless the change is tiny and purely mechanical.
 - Prefer helping the user maintain a complete mental model of the codebase over maximizing autonomous implementation speed.
 
+## Decision Memory Workflow
+
+- Record accepted design decisions in repository documentation without waiting for the user to remind you.
+- Use `docs/DECISIONS.md` for durable summaries that future agents must scan quickly.
+- Use focused detailed documents, such as `docs/phase_1_schema_review.md`, for field-level reviews, rejected alternatives, open questions, and rationale.
+- Update the relevant living design document, such as `docs/data_model.md`, when a decision changes the intended implementation.
+- Do not record personal or sensitive details while preserving decisions. Generalize examples and keep public-repo privacy rules above all.
+- Prefer structured documentation with headings, accepted/open/rejected labels, and links between summary and detailed files. Long Markdown files are acceptable when they are organized and have clear purpose.
+- Before implementing a reviewed design block, make sure the accepted decisions are reflected in the appropriate docs.
+
 ## Language Rules
 
 - Code, comments, internal identifiers, tests, and technical docs should be in English.
