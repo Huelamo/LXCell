@@ -513,6 +513,142 @@ def test_budget_actuals_report_categories_without_budget_lines(session_factory):
     assert unbudgeted_lines_by_category_id[income_category.id].remaining_minor == -5000
 
 
+def test_budget_actuals_report_uncategorized_activity_for_review(session_factory):
+    with session_scope(session_factory) as session:
+        (
+            repository,
+            user_profile,
+            _other_profile,
+            account,
+            _other_account,
+            expense_category,
+            _income_category,
+        ) = _create_reporting_context(session)
+        budget = repository.add_budget(
+            user_profile_id=user_profile.id,
+            name="Monthly budget",
+            period_type=BudgetPeriodType.MONTHLY,
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+        )
+        session.flush()
+        repository.add_budget_line(
+            budget_id=budget.id,
+            category_id=expense_category.id,
+            amount_minor=1000,
+        )
+        repository.add_transaction(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            transaction_date=date(2026, 1, 5),
+            amount_minor=700,
+            direction=Direction.OUTFLOW,
+            transaction_type=TransactionType.EXPENSE,
+            source_type=TransactionSourceType.MANUAL,
+        )
+        repository.add_transaction(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            transaction_date=date(2026, 1, 6),
+            amount_minor=300,
+            direction=Direction.INFLOW,
+            transaction_type=TransactionType.REFUND,
+            source_type=TransactionSourceType.MANUAL,
+        )
+
+    with session_scope(session_factory) as session:
+        summary = ReportingService(
+            AccountingRepository(session)
+        ).summarize_budget_actuals(
+            user_profile_id=user_profile.id,
+            budget_id=budget.id,
+        )
+
+    assert summary.uncategorized_actual_amount_minor == 1000
+    assert summary.uncategorized_transaction_count == 2
+
+
+def test_budget_uncategorized_activity_uses_report_filters(session_factory):
+    with session_scope(session_factory) as session:
+        (
+            repository,
+            user_profile,
+            _other_profile,
+            account,
+            _other_account,
+            expense_category,
+            _income_category,
+        ) = _create_reporting_context(session)
+        budget = repository.add_budget(
+            user_profile_id=user_profile.id,
+            name="Monthly budget",
+            period_type=BudgetPeriodType.MONTHLY,
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+        )
+        session.flush()
+        repository.add_budget_line(
+            budget_id=budget.id,
+            category_id=expense_category.id,
+            amount_minor=1000,
+        )
+        repository.add_transaction(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            transaction_date=date(2026, 1, 5),
+            amount_minor=100,
+            direction=Direction.OUTFLOW,
+            transaction_type=TransactionType.EXPENSE,
+            source_type=TransactionSourceType.MANUAL,
+        )
+        repository.add_transaction(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            transaction_date=date(2026, 1, 6),
+            amount_minor=200,
+            direction=Direction.OUTFLOW,
+            transaction_type=TransactionType.TRANSFER,
+            source_type=TransactionSourceType.MANUAL,
+        )
+        repository.add_transaction(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            transaction_date=date(2026, 1, 7),
+            amount_minor=300,
+            direction=Direction.OUTFLOW,
+            transaction_type=TransactionType.EXPENSE,
+            review_status=TransactionReviewStatus.IGNORED,
+            source_type=TransactionSourceType.MANUAL,
+        )
+        repository.add_transaction(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            transaction_date=date(2026, 1, 8),
+            amount_minor=400,
+            direction=Direction.OUTFLOW,
+            transaction_type=TransactionType.EXPENSE,
+            source_type=TransactionSourceType.MANUAL,
+            is_deleted=True,
+        )
+
+    with session_scope(session_factory) as session:
+        reporting_service = ReportingService(AccountingRepository(session))
+        default_summary = reporting_service.summarize_budget_actuals(
+            user_profile_id=user_profile.id,
+            budget_id=budget.id,
+        )
+        with_transfers_summary = reporting_service.summarize_budget_actuals(
+            user_profile_id=user_profile.id,
+            budget_id=budget.id,
+            include_transfers=True,
+        )
+
+    assert default_summary.uncategorized_actual_amount_minor == 100
+    assert default_summary.uncategorized_transaction_count == 1
+    assert with_transfers_summary.uncategorized_actual_amount_minor == 300
+    assert with_transfers_summary.uncategorized_transaction_count == 2
+
+
 def test_budget_actuals_reject_inactive_budget(session_factory):
     with session_scope(session_factory) as session:
         (

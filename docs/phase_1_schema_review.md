@@ -793,11 +793,12 @@ Accepted:
 - The report uses the minimum reporting filters: `user_profile_id` scope, non-deleted transactions, non-ignored transactions, and transfers excluded by default.
 - Activity in categories without budget lines is reported separately as unbudgeted actuals.
 - Unbudgeted actual lines use `planned_amount_minor = 0`.
-- Uncategorized transactions are not included in unbudgeted budget lines in this block.
+- Uncategorized transactions are not included in unbudgeted budget lines.
+- Uncategorized transactions are reported separately with total amount and transaction count.
+- Uncategorized actual amount is a review signal, not a budget line calculation.
 
 Deferred:
 
-- Reporting uncategorized actuals in budget-vs-actual summaries.
 - Monthly budget rollups.
 - Rollover behavior beyond `none`.
 - SQL-level aggregate optimization.

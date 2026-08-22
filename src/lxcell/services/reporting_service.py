@@ -59,6 +59,8 @@ class BudgetActualSummary:
     lines: tuple[BudgetActualLine, ...]
     unbudgeted_actual_amount_minor: int
     unbudgeted_lines: tuple[BudgetActualLine, ...]
+    uncategorized_actual_amount_minor: int
+    uncategorized_transaction_count: int
 
 
 class ReportingService:
@@ -210,6 +212,15 @@ class ReportingService:
         unbudgeted_actual_amount_minor = sum(
             line.actual_amount_minor for line in unbudgeted_lines
         )
+        uncategorized_transactions = self._uncategorized_transactions(
+            user_profile_id=user_profile_id,
+            start_date=report_start_date,
+            end_date=report_end_date,
+            include_transfers=include_transfers,
+        )
+        uncategorized_actual_amount_minor = sum(
+            transaction.amount_minor for transaction in uncategorized_transactions
+        )
 
         return BudgetActualSummary(
             budget_id=budget.id,
@@ -222,6 +233,8 @@ class ReportingService:
             lines=lines,
             unbudgeted_actual_amount_minor=unbudgeted_actual_amount_minor,
             unbudgeted_lines=unbudgeted_lines,
+            uncategorized_actual_amount_minor=uncategorized_actual_amount_minor,
+            uncategorized_transaction_count=len(uncategorized_transactions),
         )
 
     def _reportable_transactions(
@@ -323,6 +336,25 @@ class ReportingService:
             actual_amount_minor=actual_amount_minor,
             remaining_minor=-actual_amount_minor,
         )
+
+    def _uncategorized_transactions(
+        self,
+        *,
+        user_profile_id: int,
+        start_date: date,
+        end_date: date,
+        include_transfers: bool,
+    ) -> list[Transaction]:
+        return [
+            transaction
+            for transaction in self._reportable_transactions(
+                user_profile_id=user_profile_id,
+                start_date=start_date,
+                end_date=end_date,
+                include_transfers=include_transfers,
+            )
+            if transaction.category_id is None
+        ]
 
 
 __all__ = [
