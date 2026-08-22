@@ -202,11 +202,11 @@ Implication: repository reads that expose user-owned records should filter by `u
 
 ## 2026-08-22 - Phase 1 Initial Accounting Service
 
-Decision: implement an initial `AccountingService` for manual accounting workflows. Complete manual transactions with a user-selected category are stored as `user_confirmed`; manual transactions without a category remain `pending_review`. Both paths create manual-entry import traceability through `ImportBatch` and `ImportedTransactionSource`.
+Decision: implement an initial `AccountingService` for manual accounting workflows. Manual transactions entered by the user are stored as `user_confirmed`, including entries without a category. Both categorized and uncategorized manual entries create manual-entry import traceability through `ImportBatch` and `ImportedTransactionSource`.
 
-Reason: a user-entered transaction with an explicit category has already been reviewed by the user and should not require a second review step. Incomplete manual entries still need review, but they must not become audit-trail exceptions.
+Reason: a user-entered transaction has already been intentionally reviewed enough to become part of the ledger. Missing category information should remain visible as uncategorized data, not as an automatic pending-review state.
 
-Implication: confirmed manual entries create accepted `manual_user` classification decisions. Later manual classification confirmations supersede prior decisions and update the active transaction fields. Bank and historical imports can still enter as pending review in future import workflows.
+Implication: categorized manual entries create accepted `manual_user` classification decisions. Uncategorized manual entries are confirmed transactions without a classification decision until the user later assigns a category. Later manual classification confirmations supersede prior decisions and update the active transaction fields. Bank and historical imports can still enter as pending review in future import workflows.
 
 ## 2026-08-22 - Phase 1 Minimum Reporting Service
 
@@ -223,3 +223,19 @@ Decision: extend `ReportingService` with minimum budget-vs-actual summaries for 
 Reason: budget-vs-actual is one of the core spreadsheet replacement workflows, and it can now be tested safely on top of the ORM, repository, accounting service, and minimum reporting rules.
 
 Implication: budget actuals inherit the minimum reporting filters: scoped by `user_profile_id`, inclusive `transaction_date` range, excluded soft-deleted records, excluded ignored records, and transfers excluded by default. `actual_amount_minor` is positive in the meaning of the budget line: outflows count positively for expense-like categories, and inflows count positively for income categories. Activity in categories without budget lines is reported separately as unbudgeted actuals with planned amount `0`. Uncategorized activity is reported separately with amount and transaction count as a review signal. Monthly rollups, rollover behavior, and SQL aggregate optimization remain deferred.
+
+## 2026-08-22 - Phase 1 Local CLI For Manual Entry
+
+Decision: add a minimal local command line interface in `src/lxcell/cli.py` for initializing a SQLite database, creating profiles/accounts/categories, recording manual transactions, and listing transactions.
+
+Reason: manual data entry is now more valuable than additional reporting refinements because it lets LXCell start accumulating real local records through the reviewed ORM, repository, service, and audit-trail paths.
+
+Implication: the default local database path is `data/lxcell.db`, and `data/` remains ignored by git. The CLI uses `AccountingService` for manual transactions so manual entries keep the same confirmation, classification, and import-source audit behavior as the service layer. Bank/CSV/Excel importers remain separate future work.
+
+## 2026-08-22 - Phase 1 Local Streamlit UI
+
+Decision: add a minimal local Streamlit UI in `src/lxcell/ui/streamlit_app.py` for creating profiles, accounts, categories, recording manual transactions, viewing transactions, editing transactions, soft deleting transactions, viewing categories, editing categories, and removing categories from active use.
+
+Reason: a UI is more practical than the CLI for day-to-day manual entry. The backend now has enough reviewed behavior to expose a small local interface without inventing new financial logic in the presentation layer.
+
+Implication: the UI uses `data/lxcell.db` by default and routes writes through `AccountingService` and `AccountingRepository`. Successful writes show a visible confirmation after Streamlit reruns. If a manual transaction matches an existing registered transaction exactly by date, account, category, description, amount, currency, direction, transaction type, and payment method, the UI asks for explicit duplicate confirmation before writing another row. Transaction edits are made directly in the transactions table and then saved in batch. Classification-changing edits supersede previous classification decisions and create a new accepted manual decision when a category is assigned. Transaction delete actions are soft deletes through `transactions.is_deleted`, not hard deletes. Category edits are made directly in a categories table and can update name, type, display order, and active state. Category delete actions set `categories.is_active = false`, preserving historical transaction links; inactive categories disappear from the normal UI and remain visible only in the advanced category view. In the advanced category view, `estado` is read-only and `acción` is the editable user intent: active categories can be removed from active use, and inactive categories can be reactivated. `canonical_key` is generated automatically from the name on creation, preserved during normal renames, and shown/editable only in an advanced view. It remains a local Phase 1 interface, not the final product UI. Importers, richer review screens, and polished reporting remain later work.

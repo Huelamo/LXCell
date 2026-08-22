@@ -87,6 +87,51 @@ class AccountingService:
             display_order=display_order,
         )
 
+    def update_category(
+        self,
+        *,
+        user_profile_id: int,
+        category_id: int,
+        name: str,
+        category_type: CategoryType,
+        canonical_key: str,
+        display_order: int,
+        is_active: bool,
+    ) -> Category:
+        if not name:
+            raise ValueError("Categories require a name.")
+        if not canonical_key:
+            raise ValueError("Categories require a canonical_key.")
+
+        category = self.repository.get_category(
+            category_id=category_id,
+            user_profile_id=user_profile_id,
+        )
+        if category is None:
+            raise ValueError("Category was not found for the user profile.")
+
+        category.name = name
+        category.category_type = category_type
+        category.canonical_key = canonical_key
+        category.display_order = display_order
+        category.is_active = is_active
+        return category
+
+    def deactivate_category(
+        self,
+        *,
+        user_profile_id: int,
+        category_id: int,
+    ) -> Category:
+        category = self.repository.get_category(
+            category_id=category_id,
+            user_profile_id=user_profile_id,
+        )
+        if category is None:
+            raise ValueError("Category was not found for the user profile.")
+        category.is_active = False
+        return category
+
     def record_manual_transaction(
         self,
         *,
@@ -109,11 +154,6 @@ class AccountingService:
         if not decided_by:
             raise ValueError("Manual transactions require decided_by.")
 
-        review_status = (
-            TransactionReviewStatus.USER_CONFIRMED
-            if category_id is not None
-            else TransactionReviewStatus.PENDING_REVIEW
-        )
         transaction = self.repository.add_transaction(
             user_profile_id=user_profile_id,
             account_id=account_id,
@@ -127,7 +167,7 @@ class AccountingService:
             direction=direction,
             transaction_type=transaction_type,
             payment_method=payment_method,
-            review_status=review_status,
+            review_status=TransactionReviewStatus.USER_CONFIRMED,
             source_type=TransactionSourceType.MANUAL,
         )
         self.repository.session.flush()
@@ -176,15 +216,10 @@ class AccountingService:
         if not transaction.description_clean:
             raise ValueError("Confirmed transactions require description_clean.")
 
-        superseded_at = utc_now()
-        previous_decisions = self.repository.list_classification_decisions(
+        self._supersede_classification_decisions(
             transaction_id=transaction_id,
             user_profile_id=user_profile_id,
         )
-        for decision in previous_decisions:
-            if decision.decision_status != ClassificationDecisionStatus.SUPERSEDED:
-                decision.decision_status = ClassificationDecisionStatus.SUPERSEDED
-                decision.superseded_at = superseded_at
 
         decision = self.repository.add_classification_decision(
             transaction_id=transaction_id,
@@ -205,6 +240,90 @@ class AccountingService:
         transaction.review_status = TransactionReviewStatus.USER_CONFIRMED
 
         return decision
+
+    def update_manual_transaction(
+        self,
+        *,
+        user_profile_id: int,
+        transaction_id: int,
+        account_id: int,
+        transaction_date: date,
+        description_clean: str,
+        amount_minor: int,
+        direction: Direction,
+        transaction_type: TransactionType,
+        decided_by: str,
+        category_id: int | None = None,
+        payment_method: PaymentMethod | None = None,
+    ) -> Transaction:
+        if not description_clean:
+            raise ValueError("Manual transactions require description_clean.")
+        if not decided_by:
+            raise ValueError("Manual transaction edits require decided_by.")
+
+        transaction = self.repository.get_transaction(
+            transaction_id=transaction_id,
+            user_profile_id=user_profile_id,
+        )
+        if transaction is None:
+            raise ValueError("Transaction was not found for the user profile.")
+        if transaction.is_deleted:
+            raise ValueError("Deleted transactions cannot be edited.")
+
+        classification_changed = (
+            transaction.category_id != category_id
+            or transaction.transaction_type != transaction_type
+            or transaction.payment_method != payment_method
+        )
+
+        transaction.account_id = account_id
+        transaction.transaction_date = transaction_date
+        transaction.description_clean = description_clean
+        transaction.amount_minor = amount_minor
+        transaction.direction = direction
+        transaction.transaction_type = transaction_type
+        transaction.payment_method = payment_method
+        transaction.category_id = category_id
+        transaction.review_status = TransactionReviewStatus.USER_CONFIRMED
+
+        if classification_changed:
+            self._supersede_classification_decisions(
+                transaction_id=transaction_id,
+                user_profile_id=user_profile_id,
+            )
+            if category_id is not None:
+                self.repository.add_classification_decision(
+                    transaction_id=transaction.id,
+                    category_id=category_id,
+                    transaction_type=transaction_type,
+                    payment_method=payment_method,
+                    decision_source=ClassificationDecisionSource.MANUAL_USER,
+                    decision_status=ClassificationDecisionStatus.ACCEPTED,
+                    confidence=Decimal("1.0000"),
+                    decided_by=decided_by,
+                    notes="Manual transaction edit.",
+                )
+
+        return transaction
+
+    def soft_delete_transaction(
+        self,
+        *,
+        user_profile_id: int,
+        transaction_id: int,
+        decided_by: str,
+    ) -> Transaction:
+        if not decided_by:
+            raise ValueError("Manual transaction deletion requires decided_by.")
+
+        transaction = self.repository.get_transaction(
+            transaction_id=transaction_id,
+            user_profile_id=user_profile_id,
+        )
+        if transaction is None:
+            raise ValueError("Transaction was not found for the user profile.")
+        transaction.is_deleted = True
+        return transaction
 
     def _record_manual_audit_source(
         self,
@@ -231,6 +350,19 @@ class AccountingService:
             currency_raw=transaction.currency,
             created_transaction_id=transaction.id,
         )
+
+    def _supersede_classification_decisions(
+        self, *, transaction_id: int, user_profile_id: int
+    ) -> None:
+        superseded_at = utc_now()
+        previous_decisions = self.repository.list_classification_decisions(
+            transaction_id=transaction_id,
+            user_profile_id=user_profile_id,
+        )
+        for decision in previous_decisions:
+            if decision.decision_status != ClassificationDecisionStatus.SUPERSEDED:
+                decision.decision_status = ClassificationDecisionStatus.SUPERSEDED
+                decision.superseded_at = superseded_at
 
 
 __all__ = ["AccountingService"]

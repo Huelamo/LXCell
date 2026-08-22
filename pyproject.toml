@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "pandas",
     "SQLAlchemy>=2.0,<3.0",
+    "streamlit",
 ]
 
 [tool.setuptools.packages.find]

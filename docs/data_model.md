@@ -278,7 +278,8 @@ Rules:
 - `description_clean` is the normalized human-readable description.
 - `description_raw` preserves the source text.
 - Qualifiers such as `raw`, `clean`, and `source` should follow the main field concept in column names.
-- `category_id` can be null while a transaction is pending review.
+- `category_id` can be null while a transaction is pending review or when a
+  manual user-confirmed transaction has not been classified yet.
 - `description_clean` can be null during import, but must be present before a transaction is user-confirmed.
 - Any user correction should preserve the previous classification through `ClassificationDecision`.
 - Destructive deletion should be avoided; prefer `is_deleted` with audit metadata.

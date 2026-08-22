@@ -62,6 +62,14 @@ class AccountingRepository:
     def get_user_profile(self, user_profile_id: int) -> UserProfile | None:
         return self.session.get(UserProfile, user_profile_id)
 
+    def list_user_profiles(self, *, include_inactive: bool = False) -> list[UserProfile]:
+        statement = select(UserProfile)
+        if not include_inactive:
+            statement = statement.where(UserProfile.is_active.is_(True))
+        return list(
+            self.session.scalars(statement.order_by(UserProfile.display_name, UserProfile.id))
+        )
+
     def add_account(
         self,
         *,
@@ -129,6 +137,13 @@ class AccountingRepository:
                 statement.order_by(Category.display_order, Category.name, Category.id)
             )
         )
+
+    def get_category(self, *, category_id: int, user_profile_id: int) -> Category | None:
+        statement = select(Category).where(
+            Category.id == category_id,
+            Category.user_profile_id == user_profile_id,
+        )
+        return self.session.scalar(statement)
 
     def add_transaction(
         self,
