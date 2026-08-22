@@ -585,6 +585,7 @@ Rules:
 - Phase 1 classification rules should suggest classifications only. They should not automatically confirm transactions.
 - `auto_apply` should remain false in Phase 1. It is included as an explicit future extension point.
 - Merchant-based rules are deferred until merchant normalization is introduced.
+- `confidence` should be stored as an exact decimal value from `0.0000` to `1.0000`.
 
 ### ClassificationDecision
 
@@ -628,6 +629,8 @@ Rules:
 - Classification decisions can suggest or accept `category_id`, `transaction_type`, and `payment_method`.
 - User corrections should supersede prior decisions instead of deleting them.
 - AI suggestions should never be indistinguishable from user-confirmed records.
+- `confidence` should be stored as an exact decimal value from `0.0000` to `1.0000`.
+- `decided_by` is required. Use `system` for non-human decisions such as rules, import defaults, historical matches, and AI suggestions.
 
 ## Historical Excel Migration Entities
 

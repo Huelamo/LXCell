@@ -1,6 +1,6 @@
 # Phase 1 Schema Review
 
-Last updated: 2026-08-17
+Last updated: 2026-08-22
 
 This document records the guided schema review for the Phase 1 LXCell accounting model. It is intentionally more detailed than `docs/DECISIONS.md`, which only keeps durable decision summaries.
 
@@ -17,10 +17,11 @@ Accepted blocks:
 - Block 5: classification rules and decisions.
 - Block 6: budgets and budget lines.
 - Block 7: Phase 1 enums.
+- Block 8: initial SQLAlchemy ORM implementation details.
 
 Pending blocks:
 
-- Final SQLAlchemy implementation details and tests.
+- Repository, service, import, and reporting behavior built on top of the ORM.
 
 ## Block 1 - Cross-Table Schema Conventions
 
@@ -676,3 +677,24 @@ Accepted account type clarifications:
 - `checking` represents a bank current account.
 - `cash` represents physical cash or a manual cash wallet.
 - `loan` remains a valid account type because liabilities can be represented as accounts.
+
+## Block 8 - Initial SQLAlchemy ORM Implementation Details
+
+Accepted:
+
+- Implement the Phase 1 ORM classes in `src/lxcell/db/models.py`.
+- Use SQLAlchemy 2.x typed mappings with `Mapped[...]` and `mapped_column(...)`.
+- Keep the first implementation in one model file while the Phase 1 schema is still small.
+- Use small shared mixins for integer primary keys and timestamps.
+- Persist `StrEnum` values as their snake_case string values, not Python enum member names.
+- Store `confidence` as exact `Numeric(5, 4)` values constrained from `0.0000` to `1.0000`.
+- Require `ClassificationDecision.decided_by`.
+- Use `decided_by = system` for rule-based, import-default, historical-match, AI-suggestion, or other non-human decisions.
+- Enable SQLite foreign key enforcement in the database engine helper.
+- Add focused tests for table creation, enum persistence, classification defaults, required confirmed descriptions, and profile isolation constraints.
+
+Rationale:
+
+- Exact numeric confidence keeps audit data stable and avoids floating point artifacts.
+- A non-null `decided_by` makes system actions explicit instead of relying on null to mean non-human.
+- SQLite does not enforce foreign keys unless enabled per connection, so tests and local development must turn them on explicitly.

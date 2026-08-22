@@ -3,14 +3,22 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 
 def create_sqlite_engine(database_url: str, echo: bool = False) -> Engine:
     """Create a SQLite-compatible SQLAlchemy engine."""
-    return create_engine(database_url, echo=echo, future=True)
+    engine = create_engine(database_url, echo=echo, future=True)
+
+    @event.listens_for(engine, "connect")
+    def _enable_sqlite_foreign_keys(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    return engine
 
 
 def create_session_factory(engine: Engine) -> sessionmaker[Session]:

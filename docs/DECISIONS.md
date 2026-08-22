@@ -183,3 +183,11 @@ Decision: require Python 3.11+ and implement new Phase 1 enums with standard-lib
 Reason: `StrEnum` behaves like strings, which keeps DataFrame handling and serialization cleaner than `str, Enum` patterns that often require explicit `.value` access.
 
 Implication: CI should run on Python 3.11+. Keep `TransactionSourceType` and `ImportSourceSystem` separate because transaction origin and import source system are related but distinct concepts. `PaymentMethod` includes `peer_to_peer` for app-based person-to-person payments.
+
+## 2026-08-22 - Phase 1 ORM Implementation Details
+
+Decision: implement the initial Phase 1 SQLAlchemy ORM classes in `src/lxcell/db/models.py` using typed SQLAlchemy 2.x mappings, Python-side UTC timestamps, string-valued `StrEnum` persistence, and minimum database constraints. Store classification confidence as exact `Numeric(5, 4)` values from `0.0000` to `1.0000`. Require `ClassificationDecision.decided_by`, using `system` for non-human decisions.
+
+Reason: typed ORM classes keep the implementation close to the reviewed schema while avoiding a separate domain-object layer for now. Exact numeric confidence avoids floating point artifacts in audit records. A non-null `decided_by` makes classification history easier to read because system-generated decisions are explicit rather than represented by a missing actor.
+
+Implication: SQLite foreign keys must be enabled on connections so profile-isolation constraints are actually enforced in tests and local development. Phase 1 remains in progress; repositories, services, import behavior, and reporting behavior are still separate work.
