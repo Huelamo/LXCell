@@ -12,6 +12,8 @@ from lxcell.db.models import (
     BudgetLine,
     Category,
     ClassificationDecision,
+    ImportBatch,
+    ImportedTransactionSource,
     Transaction,
     UserProfile,
 )
@@ -22,6 +24,9 @@ from lxcell.enums.core_enums import (
     ClassificationDecisionSource,
     ClassificationDecisionStatus,
     Direction,
+    ImportAction,
+    ImportSourceSystem,
+    ImportStatus,
     OwnershipType,
     PaymentMethod,
     RolloverPolicy,
@@ -169,6 +174,62 @@ class AccountingRepository:
         )
         self.session.add(transaction)
         return transaction
+
+    def add_import_batch(
+        self,
+        *,
+        user_profile_id: int,
+        source_system: ImportSourceSystem,
+        account_id: int | None = None,
+        source_file_name: str | None = None,
+        source_file_hash: str | None = None,
+        import_status: ImportStatus = ImportStatus.COMPLETED,
+        imported_by: str | None = None,
+        notes: str | None = None,
+    ) -> ImportBatch:
+        import_batch = ImportBatch(
+            user_profile_id=user_profile_id,
+            account_id=account_id,
+            source_system=source_system,
+            source_file_name=source_file_name,
+            source_file_hash=source_file_hash,
+            import_status=import_status,
+            imported_by=imported_by,
+            notes=notes,
+        )
+        self.session.add(import_batch)
+        return import_batch
+
+    def add_imported_transaction_source(
+        self,
+        *,
+        import_batch_id: int,
+        import_action: ImportAction,
+        row_number_source: int | None = None,
+        record_id_source: str | None = None,
+        date_raw: str | None = None,
+        description_raw: str | None = None,
+        amount_raw: str | None = None,
+        currency_raw: str | None = None,
+        payload_raw_json: str | None = None,
+        normalized_hash: str | None = None,
+        created_transaction_id: int | None = None,
+    ) -> ImportedTransactionSource:
+        imported_source = ImportedTransactionSource(
+            import_batch_id=import_batch_id,
+            row_number_source=row_number_source,
+            record_id_source=record_id_source,
+            date_raw=date_raw,
+            description_raw=description_raw,
+            amount_raw=amount_raw,
+            currency_raw=currency_raw,
+            payload_raw_json=payload_raw_json,
+            normalized_hash=normalized_hash,
+            created_transaction_id=created_transaction_id,
+            import_action=import_action,
+        )
+        self.session.add(imported_source)
+        return imported_source
 
     def get_transaction(
         self, *, transaction_id: int, user_profile_id: int

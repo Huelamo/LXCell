@@ -199,3 +199,11 @@ Decision: implement an initial `AccountingRepository` in `src/lxcell/repositorie
 Reason: keeping transaction boundaries outside the repository makes persistence behavior easier to reason about and test. A single small repository is enough while the Phase 1 schema is still compact, and explicit method arguments avoid introducing DTO classes before there is enough pressure for another abstraction.
 
 Implication: repository reads that expose user-owned records should filter by `user_profile_id` where applicable. The repository should not contain classification automation, import workflows, reporting calculations, or destructive transaction deletion behavior; those remain later service-level design work.
+
+## 2026-08-22 - Phase 1 Initial Accounting Service
+
+Decision: implement an initial `AccountingService` for manual accounting workflows. Complete manual transactions with a user-selected category are stored as `user_confirmed`; manual transactions without a category remain `pending_review`. Both paths create manual-entry import traceability through `ImportBatch` and `ImportedTransactionSource`.
+
+Reason: a user-entered transaction with an explicit category has already been reviewed by the user and should not require a second review step. Incomplete manual entries still need review, but they must not become audit-trail exceptions.
+
+Implication: confirmed manual entries create accepted `manual_user` classification decisions. Later manual classification confirmations supersede prior decisions and update the active transaction fields. Bank and historical imports can still enter as pending review in future import workflows.

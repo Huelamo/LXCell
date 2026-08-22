@@ -19,10 +19,11 @@ Accepted blocks:
 - Block 7: Phase 1 enums.
 - Block 8: initial SQLAlchemy ORM implementation details.
 - Block 9: initial repository boundary.
+- Block 10: initial accounting service behavior.
 
 Pending blocks:
 
-- Service, import, and reporting behavior built on top of the ORM and repository.
+- Import and reporting behavior built on top of the ORM, repository, and service.
 
 ## Block 1 - Cross-Table Schema Conventions
 
@@ -724,3 +725,24 @@ Rationale:
 - The Phase 1 model is still compact enough for one repository.
 - Transaction scope is clearer when the caller owns the session boundary.
 - Avoiding DTO classes keeps the first persistence API small while LXCell's service layer is still being designed.
+
+## Block 10 - Initial Accounting Service Behavior
+
+Accepted:
+
+- Add an initial `AccountingService` in `src/lxcell/services/accounting_service.py`.
+- Inject an `AccountingRepository` into the service.
+- Keep commit and rollback ownership outside the service in `session_scope`.
+- Provide basic creation methods for user profiles, accounts, and categories.
+- Provide a manual transaction workflow.
+- Complete manual transactions with `category_id` are stored with `review_status = user_confirmed`.
+- Manual transactions without `category_id` are stored with `review_status = pending_review`.
+- Manual transaction workflows always create manual-entry audit records through `ImportBatch` and `ImportedTransactionSource`.
+- Complete manual transactions create accepted `manual_user` classification decisions.
+- Manual classification confirmation supersedes previous classification decisions and updates the active transaction classification fields.
+
+Rationale:
+
+- A user-entered transaction with an explicit category has already been reviewed by the user.
+- Quick manual entries without a category still need review.
+- Manual entry should not be an audit-trail exception; it should use the same source traceability model as imports.
