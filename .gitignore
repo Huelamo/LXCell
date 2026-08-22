@@ -1,6 +1,9 @@
 venv/
+.venv/
+build/
 .idea/
 **/__pycache__/
+*.egg-info/
 *.DS_Store
 data/
 

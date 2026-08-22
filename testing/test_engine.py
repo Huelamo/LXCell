@@ -5,9 +5,9 @@ import pickle
 from pathlib import Path
 import pandas as pd
 
-from engine.accounting_book import AccountingBook
-from engine.user_interface import UserInterface
-from enums.engine_enums import Directories, FileExtensions, DateElements
+from lxcell.engine.accounting_book import AccountingBook
+from lxcell.engine.user_interface import UserInterface
+from lxcell.enums.engine_enums import Directories, FileExtensions, DateElements
 
 _PATH_DATA = Path(__file__).resolve().parent.parent / Directories.DATA.value
 DUMMY_USER = "TestUser"
@@ -36,7 +36,7 @@ class TestBookInitializer(TestCase):
         DUMMY_COMMENT,  # Comentario del gasto
         "10",  # Salir
     ])
-    @patch("engine.accounting_book.datetime")
+    @patch("lxcell.engine.accounting_book.datetime")
     def setUp(self, mock_datetime, mock_input) -> None:
         # Mock the new register's ID
         mock_datetime.now.return_value.strftime.return_value = DUMMY_ID

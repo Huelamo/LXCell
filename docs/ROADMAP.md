@@ -1,6 +1,6 @@
 # LXCell Roadmap
 
-Last updated: 2026-08-05
+Last updated: 2026-08-13
 
 ## Phase 0 - Project Foundation
 
@@ -14,7 +14,7 @@ Goals:
 
 ## Phase 1 - Core Accounting Model
 
-Status: pending
+Status: in progress
 
 Goals:
 
@@ -64,8 +64,8 @@ Status: pending
 Goals:
 
 - Import user-provided bank statements.
-- Start with Revolut personal and shared Revolut exports.
-- Add ING after Revolut import is stable.
+- Start with the most active personal and shared statement exports.
+- Add lower-volume statement sources after the first importer is stable.
 - Detect duplicate transactions across repeated imports.
 - Keep original import metadata for auditability.
 
