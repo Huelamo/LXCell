@@ -449,7 +449,7 @@ def test_budget_actuals_use_custom_date_range_and_transfer_default(
     assert with_transfers_summary.actual_amount_minor == 3000
 
 
-def test_budget_actuals_ignore_categories_without_budget_lines(session_factory):
+def test_budget_actuals_report_categories_without_budget_lines(session_factory):
     with session_scope(session_factory) as session:
         (
             repository,
@@ -502,8 +502,15 @@ def test_budget_actuals_ignore_categories_without_budget_lines(session_factory):
             budget_id=budget.id,
         )
 
+    unbudgeted_lines_by_category_id = {
+        line.category_id: line for line in summary.unbudgeted_lines
+    }
     assert len(summary.lines) == 1
     assert summary.actual_amount_minor == 1000
+    assert summary.unbudgeted_actual_amount_minor == 5000
+    assert unbudgeted_lines_by_category_id[income_category.id].planned_amount_minor == 0
+    assert unbudgeted_lines_by_category_id[income_category.id].actual_amount_minor == 5000
+    assert unbudgeted_lines_by_category_id[income_category.id].remaining_minor == -5000
 
 
 def test_budget_actuals_reject_inactive_budget(session_factory):

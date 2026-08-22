@@ -791,10 +791,13 @@ Accepted:
 - Actual amounts are positive in the meaning of the budget line: outflows count positively for expense-like categories, and inflows count positively for income categories.
 - Remaining amount is `planned_amount_minor - actual_amount_minor`.
 - The report uses the minimum reporting filters: `user_profile_id` scope, non-deleted transactions, non-ignored transactions, and transfers excluded by default.
+- Activity in categories without budget lines is reported separately as unbudgeted actuals.
+- Unbudgeted actual lines use `planned_amount_minor = 0`.
+- Uncategorized transactions are not included in unbudgeted budget lines in this block.
 
 Deferred:
 
-- Reporting unbudgeted actuals.
+- Reporting uncategorized actuals in budget-vs-actual summaries.
 - Monthly budget rollups.
 - Rollover behavior beyond `none`.
 - SQL-level aggregate optimization.

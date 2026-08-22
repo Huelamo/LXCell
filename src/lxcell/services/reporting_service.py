@@ -57,6 +57,8 @@ class BudgetActualSummary:
     actual_amount_minor: int
     remaining_minor: int
     lines: tuple[BudgetActualLine, ...]
+    unbudgeted_actual_amount_minor: int
+    unbudgeted_lines: tuple[BudgetActualLine, ...]
 
 
 class ReportingService:
@@ -168,14 +170,15 @@ class ReportingService:
 
         report_start_date = start_date or budget.start_date
         report_end_date = end_date or budget.end_date
+        category_total_list = self.summarize_by_category(
+            user_profile_id=user_profile_id,
+            start_date=report_start_date,
+            end_date=report_end_date,
+            include_transfers=include_transfers,
+        )
         category_totals = {
             total.category_id: total.amount_minor
-            for total in self.summarize_by_category(
-                user_profile_id=user_profile_id,
-                start_date=report_start_date,
-                end_date=report_end_date,
-                include_transfers=include_transfers,
-            )
+            for total in category_total_list
         }
 
         lines = tuple(
@@ -196,6 +199,17 @@ class ReportingService:
         )
         planned_amount_minor = sum(line.planned_amount_minor for line in lines)
         actual_amount_minor = sum(line.actual_amount_minor for line in lines)
+        budgeted_category_ids = {line.category_id for line in lines}
+        unbudgeted_lines = tuple(
+            self._unbudgeted_actual_line(category_total=category_total)
+            for category_total in self._unbudgeted_category_totals(
+                category_totals=category_total_list,
+                budgeted_category_ids=budgeted_category_ids,
+            )
+        )
+        unbudgeted_actual_amount_minor = sum(
+            line.actual_amount_minor for line in unbudgeted_lines
+        )
 
         return BudgetActualSummary(
             budget_id=budget.id,
@@ -206,6 +220,8 @@ class ReportingService:
             actual_amount_minor=actual_amount_minor,
             remaining_minor=planned_amount_minor - actual_amount_minor,
             lines=lines,
+            unbudgeted_actual_amount_minor=unbudgeted_actual_amount_minor,
+            unbudgeted_lines=unbudgeted_lines,
         )
 
     def _reportable_transactions(
@@ -274,6 +290,39 @@ class ReportingService:
         if category_type == CategoryType.INCOME:
             return signed_actual_minor
         return -signed_actual_minor
+
+    def _unbudgeted_category_totals(
+        self,
+        *,
+        category_totals: list[CategoryTotal],
+        budgeted_category_ids: set[int],
+    ) -> list[CategoryTotal]:
+        return [
+            category_total
+            for category_total in category_totals
+            if category_total.category_id not in budgeted_category_ids
+            and category_total.category_id is not None
+        ]
+
+    def _unbudgeted_actual_line(
+        self, *, category_total: CategoryTotal
+    ) -> BudgetActualLine:
+        if category_total.category_type is None:
+            raise ValueError("Unbudgeted category totals require category_type.")
+        if category_total.category_name is None:
+            raise ValueError("Unbudgeted category totals require category_name.")
+        actual_amount_minor = self._budget_actual_amount_minor(
+            category_type=category_total.category_type,
+            signed_actual_minor=category_total.amount_minor,
+        )
+        return BudgetActualLine(
+            category_id=category_total.category_id,
+            category_name=category_total.category_name,
+            category_type=category_total.category_type,
+            planned_amount_minor=0,
+            actual_amount_minor=actual_amount_minor,
+            remaining_minor=-actual_amount_minor,
+        )
 
 
 __all__ = [
