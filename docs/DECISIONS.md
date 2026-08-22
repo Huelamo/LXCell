@@ -191,3 +191,11 @@ Decision: implement the initial Phase 1 SQLAlchemy ORM classes in `src/lxcell/db
 Reason: typed ORM classes keep the implementation close to the reviewed schema while avoiding a separate domain-object layer for now. Exact numeric confidence avoids floating point artifacts in audit records. A non-null `decided_by` makes classification history easier to read because system-generated decisions are explicit rather than represented by a missing actor.
 
 Implication: SQLite foreign keys must be enabled on connections so profile-isolation constraints are actually enforced in tests and local development. Phase 1 remains in progress; repositories, services, import behavior, and reporting behavior are still separate work.
+
+## 2026-08-22 - Phase 1 Initial Repository Boundary
+
+Decision: implement an initial `AccountingRepository` in `src/lxcell/repositories/accounting_repository.py` that receives an already-open SQLAlchemy `Session`, adds and queries the reviewed Phase 1 ORM entities, and leaves transaction commit/rollback ownership to `session_scope`.
+
+Reason: keeping transaction boundaries outside the repository makes persistence behavior easier to reason about and test. A single small repository is enough while the Phase 1 schema is still compact, and explicit method arguments avoid introducing DTO classes before there is enough pressure for another abstraction.
+
+Implication: repository reads that expose user-owned records should filter by `user_profile_id` where applicable. The repository should not contain classification automation, import workflows, reporting calculations, or destructive transaction deletion behavior; those remain later service-level design work.

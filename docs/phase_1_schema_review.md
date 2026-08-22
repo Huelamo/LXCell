@@ -18,10 +18,11 @@ Accepted blocks:
 - Block 6: budgets and budget lines.
 - Block 7: Phase 1 enums.
 - Block 8: initial SQLAlchemy ORM implementation details.
+- Block 9: initial repository boundary.
 
 Pending blocks:
 
-- Repository, service, import, and reporting behavior built on top of the ORM.
+- Service, import, and reporting behavior built on top of the ORM and repository.
 
 ## Block 1 - Cross-Table Schema Conventions
 
@@ -698,3 +699,28 @@ Rationale:
 - Exact numeric confidence keeps audit data stable and avoids floating point artifacts.
 - A non-null `decided_by` makes system actions explicit instead of relying on null to mean non-human.
 - SQLite does not enforce foreign keys unless enabled per connection, so tests and local development must turn them on explicitly.
+
+## Block 9 - Initial Repository Boundary
+
+Accepted:
+
+- Add an initial `AccountingRepository` in `src/lxcell/repositories/accounting_repository.py`.
+- Inject an existing SQLAlchemy `Session` into the repository.
+- Keep commit and rollback ownership outside the repository in `session_scope`.
+- Use explicit method arguments rather than DTO classes for the first repository implementation.
+- Include basic add/get/list methods for user profiles, accounts, categories, transactions, classification decisions, budgets, and budget lines.
+- Scope user-owned reads by `user_profile_id` where practical.
+- Default account and category list methods to active records only.
+- Default transaction list methods to non-deleted transactions only.
+
+Deferred:
+
+- Separate repositories per aggregate or entity.
+- Repository-managed unit of work.
+- Service-level workflows such as transaction confirmation, classification application, import handling, and reporting calculations.
+
+Rationale:
+
+- The Phase 1 model is still compact enough for one repository.
+- Transaction scope is clearer when the caller owns the session boundary.
+- Avoiding DTO classes keeps the first persistence API small while LXCell's service layer is still being designed.
