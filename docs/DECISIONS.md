@@ -207,3 +207,11 @@ Decision: implement an initial `AccountingService` for manual accounting workflo
 Reason: a user-entered transaction with an explicit category has already been reviewed by the user and should not require a second review step. Incomplete manual entries still need review, but they must not become audit-trail exceptions.
 
 Implication: confirmed manual entries create accepted `manual_user` classification decisions. Later manual classification confirmations supersede prior decisions and update the active transaction fields. Bank and historical imports can still enter as pending review in future import workflows.
+
+## 2026-08-22 - Phase 1 Minimum Reporting Service
+
+Decision: implement a minimal `ReportingService` in `src/lxcell/services/reporting_service.py` for date-range cashflow and category totals. Reports use `transaction_date`, filter by `user_profile_id`, exclude soft-deleted transactions, exclude ignored transactions, and exclude transfers by default.
+
+Reason: LXCell needs early accounting behavior that can be verified independently of UI, imports, and budget reports. Keeping the first reporting layer small makes direction handling, soft deletion, ignored records, and transfer exclusion explicit before adding budget-vs-actual calculations.
+
+Implication: cashflow summaries return positive inflow, outflow, and neutral buckets in minor units, with `net_minor = inflow_minor - outflow_minor`. Category totals use signed minor units so inflows are positive, outflows are negative, and neutral movements contribute zero. Budget reporting remains a later block.

@@ -20,10 +20,11 @@ Accepted blocks:
 - Block 8: initial SQLAlchemy ORM implementation details.
 - Block 9: initial repository boundary.
 - Block 10: initial accounting service behavior.
+- Block 11: minimum reporting service behavior.
 
 Pending blocks:
 
-- Import and reporting behavior built on top of the ORM, repository, and service.
+- Import behavior and budget-vs-actual reporting built on top of the ORM, repository, and services.
 
 ## Block 1 - Cross-Table Schema Conventions
 
@@ -746,3 +747,31 @@ Rationale:
 - A user-entered transaction with an explicit category has already been reviewed by the user.
 - Quick manual entries without a category still need review.
 - Manual entry should not be an audit-trail exception; it should use the same source traceability model as imports.
+
+## Block 11 - Minimum Reporting Service Behavior
+
+Accepted:
+
+- Add a minimal `ReportingService` in `src/lxcell/services/reporting_service.py`.
+- Add immutable result objects for cashflow summaries and category totals.
+- Report date ranges use `Transaction.transaction_date`.
+- Date ranges are inclusive.
+- Reports are scoped by `user_profile_id`.
+- Reports exclude `transactions.is_deleted` records.
+- Reports exclude `review_status = ignored`.
+- Reports exclude `transaction_type = transfer` by default.
+- Cashflow summaries return positive `inflow_minor`, `outflow_minor`, and `neutral_minor` totals.
+- Cashflow `net_minor` equals `inflow_minor - outflow_minor`.
+- Category totals use signed minor units: inflows are positive, outflows are negative, and neutral transactions contribute zero.
+- Uncategorized transactions appear as a `category_id = null` group.
+
+Deferred:
+
+- Budget-vs-actual reporting.
+- Monthly rollups.
+- SQL-level aggregate optimization.
+
+Rationale:
+
+- The first reporting behavior should verify accounting semantics before UI and import work.
+- Keeping totals in minor units avoids formatting and rounding concerns in the core calculation layer.
