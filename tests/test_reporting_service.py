@@ -6,6 +6,7 @@ from lxcell.db.models import Base
 from lxcell.db.session import create_session_factory, create_sqlite_engine, session_scope
 from lxcell.enums.core_enums import (
     AccountType,
+    BudgetPeriodType,
     CategoryType,
     Direction,
     TransactionReviewStatus,
@@ -311,3 +312,223 @@ def test_reporting_uses_inclusive_date_range(session_factory):
         )
 
     assert summary.outflow_minor == 5000
+
+
+def test_budget_actuals_compare_planned_and_actual_by_budget_line(
+    session_factory,
+):
+    with session_scope(session_factory) as session:
+        (
+            repository,
+            user_profile,
+            _other_profile,
+            account,
+            _other_account,
+            expense_category,
+            income_category,
+        ) = _create_reporting_context(session)
+        budget = repository.add_budget(
+            user_profile_id=user_profile.id,
+            name="Monthly budget",
+            period_type=BudgetPeriodType.MONTHLY,
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+        )
+        session.flush()
+        repository.add_budget_line(
+            budget_id=budget.id,
+            category_id=expense_category.id,
+            amount_minor=3000,
+        )
+        repository.add_budget_line(
+            budget_id=budget.id,
+            category_id=income_category.id,
+            amount_minor=5000,
+        )
+        repository.add_transaction(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            category_id=expense_category.id,
+            transaction_date=date(2026, 1, 5),
+            amount_minor=1200,
+            direction=Direction.OUTFLOW,
+            transaction_type=TransactionType.EXPENSE,
+            source_type=TransactionSourceType.MANUAL,
+        )
+        repository.add_transaction(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            category_id=income_category.id,
+            transaction_date=date(2026, 1, 6),
+            amount_minor=5000,
+            direction=Direction.INFLOW,
+            transaction_type=TransactionType.INCOME,
+            source_type=TransactionSourceType.MANUAL,
+        )
+
+    with session_scope(session_factory) as session:
+        summary = ReportingService(
+            AccountingRepository(session)
+        ).summarize_budget_actuals(
+            user_profile_id=user_profile.id,
+            budget_id=budget.id,
+        )
+
+    lines_by_category_id = {line.category_id: line for line in summary.lines}
+    assert summary.planned_amount_minor == 8000
+    assert summary.actual_amount_minor == 6200
+    assert summary.remaining_minor == 1800
+    assert lines_by_category_id[expense_category.id].planned_amount_minor == 3000
+    assert lines_by_category_id[expense_category.id].actual_amount_minor == 1200
+    assert lines_by_category_id[expense_category.id].remaining_minor == 1800
+    assert lines_by_category_id[income_category.id].actual_amount_minor == 5000
+
+
+def test_budget_actuals_use_custom_date_range_and_transfer_default(
+    session_factory,
+):
+    with session_scope(session_factory) as session:
+        (
+            repository,
+            user_profile,
+            _other_profile,
+            account,
+            _other_account,
+            expense_category,
+            _income_category,
+        ) = _create_reporting_context(session)
+        budget = repository.add_budget(
+            user_profile_id=user_profile.id,
+            name="Monthly budget",
+            period_type=BudgetPeriodType.MONTHLY,
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+        )
+        session.flush()
+        repository.add_budget_line(
+            budget_id=budget.id,
+            category_id=expense_category.id,
+            amount_minor=10000,
+        )
+        for transaction_date, amount_minor, transaction_type in [
+            (date(2026, 1, 5), 1000, TransactionType.EXPENSE),
+            (date(2026, 1, 6), 2000, TransactionType.TRANSFER),
+            (date(2026, 2, 5), 3000, TransactionType.EXPENSE),
+        ]:
+            repository.add_transaction(
+                user_profile_id=user_profile.id,
+                account_id=account.id,
+                category_id=expense_category.id,
+                transaction_date=transaction_date,
+                amount_minor=amount_minor,
+                direction=Direction.OUTFLOW,
+                transaction_type=transaction_type,
+                source_type=TransactionSourceType.MANUAL,
+            )
+
+    with session_scope(session_factory) as session:
+        reporting_service = ReportingService(AccountingRepository(session))
+        default_summary = reporting_service.summarize_budget_actuals(
+            user_profile_id=user_profile.id,
+            budget_id=budget.id,
+        )
+        custom_summary = reporting_service.summarize_budget_actuals(
+            user_profile_id=user_profile.id,
+            budget_id=budget.id,
+            start_date=date(2026, 2, 1),
+            end_date=date(2026, 2, 28),
+        )
+        with_transfers_summary = reporting_service.summarize_budget_actuals(
+            user_profile_id=user_profile.id,
+            budget_id=budget.id,
+            include_transfers=True,
+        )
+
+    assert default_summary.actual_amount_minor == 1000
+    assert custom_summary.actual_amount_minor == 3000
+    assert with_transfers_summary.actual_amount_minor == 3000
+
+
+def test_budget_actuals_ignore_categories_without_budget_lines(session_factory):
+    with session_scope(session_factory) as session:
+        (
+            repository,
+            user_profile,
+            _other_profile,
+            account,
+            _other_account,
+            expense_category,
+            income_category,
+        ) = _create_reporting_context(session)
+        budget = repository.add_budget(
+            user_profile_id=user_profile.id,
+            name="Monthly budget",
+            period_type=BudgetPeriodType.MONTHLY,
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+        )
+        session.flush()
+        repository.add_budget_line(
+            budget_id=budget.id,
+            category_id=expense_category.id,
+            amount_minor=1000,
+        )
+        repository.add_transaction(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            category_id=expense_category.id,
+            transaction_date=date(2026, 1, 5),
+            amount_minor=1000,
+            direction=Direction.OUTFLOW,
+            transaction_type=TransactionType.EXPENSE,
+            source_type=TransactionSourceType.MANUAL,
+        )
+        repository.add_transaction(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            category_id=income_category.id,
+            transaction_date=date(2026, 1, 6),
+            amount_minor=5000,
+            direction=Direction.INFLOW,
+            transaction_type=TransactionType.INCOME,
+            source_type=TransactionSourceType.MANUAL,
+        )
+
+    with session_scope(session_factory) as session:
+        summary = ReportingService(
+            AccountingRepository(session)
+        ).summarize_budget_actuals(
+            user_profile_id=user_profile.id,
+            budget_id=budget.id,
+        )
+
+    assert len(summary.lines) == 1
+    assert summary.actual_amount_minor == 1000
+
+
+def test_budget_actuals_reject_inactive_budget(session_factory):
+    with session_scope(session_factory) as session:
+        (
+            repository,
+            user_profile,
+            _other_profile,
+            _account,
+            _other_account,
+            _expense_category,
+            _income_category,
+        ) = _create_reporting_context(session)
+        budget = repository.add_budget(
+            user_profile_id=user_profile.id,
+            name="Inactive budget",
+            period_type=BudgetPeriodType.MONTHLY,
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+            is_active=False,
+        )
+
+    with session_scope(session_factory) as session:
+        with pytest.raises(ValueError):
+            ReportingService(AccountingRepository(session)).summarize_budget_actuals(
+                user_profile_id=user_profile.id,
+                budget_id=budget.id,
+            )

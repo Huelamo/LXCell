@@ -2,6 +2,8 @@
 
 from lxcell.services.accounting_service import AccountingService
 from lxcell.services.reporting_service import (
+    BudgetActualLine,
+    BudgetActualSummary,
     CashflowSummary,
     CategoryTotal,
     ReportingService,
@@ -9,6 +11,8 @@ from lxcell.services.reporting_service import (
 
 __all__ = [
     "AccountingService",
+    "BudgetActualLine",
+    "BudgetActualSummary",
     "CashflowSummary",
     "CategoryTotal",
     "ReportingService",

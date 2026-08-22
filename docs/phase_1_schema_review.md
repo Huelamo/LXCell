@@ -21,10 +21,11 @@ Accepted blocks:
 - Block 9: initial repository boundary.
 - Block 10: initial accounting service behavior.
 - Block 11: minimum reporting service behavior.
+- Block 12: budget actual reporting behavior.
 
 Pending blocks:
 
-- Import behavior and budget-vs-actual reporting built on top of the ORM, repository, and services.
+- Import behavior, unbudgeted reporting, monthly rollups, and rollover behavior.
 
 ## Block 1 - Cross-Table Schema Conventions
 
@@ -775,3 +776,30 @@ Rationale:
 
 - The first reporting behavior should verify accounting semantics before UI and import work.
 - Keeping totals in minor units avoids formatting and rounding concerns in the core calculation layer.
+
+## Block 12 - Budget Actual Reporting Behavior
+
+Accepted:
+
+- Extend `ReportingService` with budget-vs-actual summaries.
+- Budget-vs-actual summaries operate on active budgets.
+- The default report range is `Budget.start_date` through `Budget.end_date`.
+- Callers may provide a custom inclusive date range.
+- Each result line corresponds to one `BudgetLine`.
+- Planned amounts come from `BudgetLine.amount_minor`.
+- Actual amounts come from transactions in the same category as the budget line.
+- Actual amounts are positive in the meaning of the budget line: outflows count positively for expense-like categories, and inflows count positively for income categories.
+- Remaining amount is `planned_amount_minor - actual_amount_minor`.
+- The report uses the minimum reporting filters: `user_profile_id` scope, non-deleted transactions, non-ignored transactions, and transfers excluded by default.
+
+Deferred:
+
+- Reporting unbudgeted actuals.
+- Monthly budget rollups.
+- Rollover behavior beyond `none`.
+- SQL-level aggregate optimization.
+
+Rationale:
+
+- Budget-vs-actual is central to replacing the spreadsheet review workflow.
+- Keeping the first report scoped to budget lines avoids hiding unreviewed design choices about unbudgeted spending presentation.

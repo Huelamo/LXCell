@@ -215,3 +215,11 @@ Decision: implement a minimal `ReportingService` in `src/lxcell/services/reporti
 Reason: LXCell needs early accounting behavior that can be verified independently of UI, imports, and budget reports. Keeping the first reporting layer small makes direction handling, soft deletion, ignored records, and transfer exclusion explicit before adding budget-vs-actual calculations.
 
 Implication: cashflow summaries return positive inflow, outflow, and neutral buckets in minor units, with `net_minor = inflow_minor - outflow_minor`. Category totals use signed minor units so inflows are positive, outflows are negative, and neutral movements contribute zero. Budget reporting remains a later block.
+
+## 2026-08-22 - Phase 1 Budget Actual Reporting
+
+Decision: extend `ReportingService` with minimum budget-vs-actual summaries for active budgets and their budget lines. The report compares each planned budget-line amount to actual transaction activity for that same category in a date range, defaulting to the budget start and end dates.
+
+Reason: budget-vs-actual is one of the core spreadsheet replacement workflows, and it can now be tested safely on top of the ORM, repository, accounting service, and minimum reporting rules.
+
+Implication: budget actuals inherit the minimum reporting filters: scoped by `user_profile_id`, inclusive `transaction_date` range, excluded soft-deleted records, excluded ignored records, and transfers excluded by default. `actual_amount_minor` is positive in the meaning of the budget line: outflows count positively for expense-like categories, and inflows count positively for income categories. Unbudgeted actuals, monthly rollups, rollover behavior, and SQL aggregate optimization remain deferred.

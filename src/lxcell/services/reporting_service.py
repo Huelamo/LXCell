@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from datetime import date
 
-from lxcell.db.models import Transaction
+from lxcell.db.models import BudgetLine, Transaction
 from lxcell.enums.core_enums import (
     CategoryType,
     Direction,
@@ -31,6 +31,32 @@ class CategoryTotal:
     category_name: str | None
     category_type: CategoryType | None
     amount_minor: int
+
+
+@dataclass(frozen=True)
+class BudgetActualLine:
+    """Budget-vs-actual result for one budget line."""
+
+    category_id: int
+    category_name: str
+    category_type: CategoryType
+    planned_amount_minor: int
+    actual_amount_minor: int
+    remaining_minor: int
+
+
+@dataclass(frozen=True)
+class BudgetActualSummary:
+    """Budget-vs-actual result for one budget and date range."""
+
+    budget_id: int
+    budget_name: str
+    start_date: date
+    end_date: date
+    planned_amount_minor: int
+    actual_amount_minor: int
+    remaining_minor: int
+    lines: tuple[BudgetActualLine, ...]
 
 
 class ReportingService:
@@ -122,6 +148,66 @@ class ReportingService:
             ),
         )
 
+    def summarize_budget_actuals(
+        self,
+        *,
+        user_profile_id: int,
+        budget_id: int,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        include_transfers: bool = False,
+    ) -> BudgetActualSummary:
+        budget = self.repository.get_budget(
+            budget_id=budget_id,
+            user_profile_id=user_profile_id,
+        )
+        if budget is None:
+            raise ValueError("Budget was not found for the user profile.")
+        if not budget.is_active:
+            raise ValueError("Budget must be active for Phase 1 reporting.")
+
+        report_start_date = start_date or budget.start_date
+        report_end_date = end_date or budget.end_date
+        category_totals = {
+            total.category_id: total.amount_minor
+            for total in self.summarize_by_category(
+                user_profile_id=user_profile_id,
+                start_date=report_start_date,
+                end_date=report_end_date,
+                include_transfers=include_transfers,
+            )
+        }
+
+        lines = tuple(
+            self._budget_actual_line(
+                budget_line=budget_line,
+                signed_actual_minor=category_totals.get(
+                    budget_line.category_id, 0
+                ),
+            )
+            for budget_line in sorted(
+                budget.budget_lines,
+                key=lambda line: (
+                    line.category.display_order,
+                    line.category.name,
+                    line.id,
+                ),
+            )
+        )
+        planned_amount_minor = sum(line.planned_amount_minor for line in lines)
+        actual_amount_minor = sum(line.actual_amount_minor for line in lines)
+
+        return BudgetActualSummary(
+            budget_id=budget.id,
+            budget_name=budget.name,
+            start_date=report_start_date,
+            end_date=report_end_date,
+            planned_amount_minor=planned_amount_minor,
+            actual_amount_minor=actual_amount_minor,
+            remaining_minor=planned_amount_minor - actual_amount_minor,
+            lines=lines,
+        )
+
     def _reportable_transactions(
         self,
         *,
@@ -164,5 +250,36 @@ class ReportingService:
             return -transaction.amount_minor
         return 0
 
+    def _budget_actual_line(
+        self, *, budget_line: BudgetLine, signed_actual_minor: int
+    ) -> BudgetActualLine:
+        category_type = budget_line.category.category_type
+        actual_amount_minor = self._budget_actual_amount_minor(
+            category_type=category_type,
+            signed_actual_minor=signed_actual_minor,
+        )
+        return BudgetActualLine(
+            category_id=budget_line.category_id,
+            category_name=budget_line.category.name,
+            category_type=category_type,
+            planned_amount_minor=budget_line.amount_minor,
+            actual_amount_minor=actual_amount_minor,
+            remaining_minor=budget_line.amount_minor - actual_amount_minor,
+        )
 
-__all__ = ["CashflowSummary", "CategoryTotal", "ReportingService"]
+    @staticmethod
+    def _budget_actual_amount_minor(
+        *, category_type: CategoryType, signed_actual_minor: int
+    ) -> int:
+        if category_type == CategoryType.INCOME:
+            return signed_actual_minor
+        return -signed_actual_minor
+
+
+__all__ = [
+    "BudgetActualLine",
+    "BudgetActualSummary",
+    "CashflowSummary",
+    "CategoryTotal",
+    "ReportingService",
+]
