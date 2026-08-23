@@ -16,7 +16,7 @@ import streamlit as st
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from lxcell.db.models import Category, ImportBatch, Transaction
+from lxcell.db.models import Category, CategoryMapping, ImportBatch, Transaction
 from lxcell.db.runtime import DEFAULT_DATABASE_PATH, create_local_session_factory
 from lxcell.db.session import session_scope
 from lxcell.enums.core_enums import (
@@ -32,6 +32,7 @@ from lxcell.enums.core_enums import (
 from lxcell.importers import HistoricalExcelPreview
 from lxcell.repositories import AccountingRepository
 from lxcell.services import AccountingService
+from lxcell.services.historical_excel_import_service import HistoricalExcelImportService
 
 PENDING_DUPLICATE_TRANSACTION_KEY = "lxcell_pending_duplicate_transaction"
 HISTORICAL_EXCEL_PREVIEW_KEY = "lxcell_historical_excel_preview"
@@ -254,14 +255,26 @@ def render_transactions(session_factory, selected_profile_id: int | None) -> Non
         return
 
     render_flash_success("transactions")
-    accounts, categories = load_accounting_lists(session_factory, selected_profile_id)
-    account_labels = {account.id: account.name for account in accounts}
-    category_labels = {None: "Sin categoría"} | {
-        category.id: category.name for category in categories
+    accounts, categories = load_accounting_lists(
+        session_factory,
+        selected_profile_id,
+        include_inactive=True,
+    )
+    account_labels = {
+        account.id: account_label_for_transaction_table(account)
+        for account in accounts
     }
-    account_ids_by_label = {account.name: account.id for account in accounts}
+    category_labels = {None: "Sin categoría"} | {
+        category.id: category_label_for_transaction_table(category)
+        for category in categories
+    }
+    account_ids_by_label = {
+        account_label_for_transaction_table(account): account.id
+        for account in accounts
+    }
     category_ids_by_label = {"Sin categoría": None} | {
-        category.name: category.id for category in categories
+        category_label_for_transaction_table(category): category.id
+        for category in categories
     }
 
     with session_scope(session_factory) as session:
@@ -461,6 +474,7 @@ def render_import_preview(session_factory, selected_profile_id: int | None) -> N
         return
 
     st.subheader("Importar Excel histórico")
+    render_flash_success("historical_import")
     uploaded_file = st.file_uploader("Archivo .xlsx", type=["xlsx"])
     sheet_name = st.text_input("Hoja", value="Registro")
 
@@ -630,13 +644,31 @@ def render_historical_import_preparation(
         include_inactive=True,
     )
     category_plan = historical_category_import_plan(categories, preview)
+    category_mapping_suggestions = historical_category_mapping_suggestions(
+        session_factory,
+        user_profile_id=selected_profile_id,
+        category_plan=category_plan,
+    )
+    category_mapping_overrides = render_historical_category_mapping_controls(
+        categories,
+        category_plan,
+        category_mapping_suggestions,
+    )
+    resolved_category_plan = apply_historical_category_mapping_to_plan(
+        category_plan,
+        categories,
+        category_mapping_overrides,
+    )
     category_conflicts = [
-        row for row in category_plan if row["acción"] == "conflicto"
+        row for row in resolved_category_plan if row["acción"] == "conflicto"
     ]
 
     transaction_column, category_column, account_column = st.columns(3)
     transaction_column.metric("Transacciones", preview.transaction_count)
-    category_column.metric("Categorías nuevas", count_rows_by_action(category_plan, "crear"))
+    category_column.metric(
+        "Categorías nuevas",
+        count_rows_by_action(resolved_category_plan, "crear"),
+    )
     account_column.metric("Cuenta destino", HISTORICAL_EXCEL_ACCOUNT_NAME)
 
     if validation_blockers:
@@ -647,8 +679,8 @@ def render_historical_import_preparation(
     if category_conflicts:
         st.warning("Hay conflictos de categorías que requieren revisión.")
 
-    if category_plan:
-        st.dataframe(pd.DataFrame(category_plan), use_container_width=True)
+    if resolved_category_plan:
+        st.dataframe(pd.DataFrame(resolved_category_plan), use_container_width=True)
 
     can_prepare_import = (
         not validation_blockers
@@ -657,11 +689,35 @@ def render_historical_import_preparation(
         and preview.transaction_count > 0
     )
     if can_prepare_import:
-        st.checkbox(
-            "Confirmo que quiero preparar la importación de este Excel histórico",
-            key="confirm_historical_excel_import_preparation",
+        confirmed_by = st.text_input("Confirmado por", value="local_ui")
+        user_confirmed = st.checkbox(
+            "Confirmo que quiero importar este Excel histórico en la base de datos",
+            key="confirm_historical_excel_import",
         )
-        st.success("La importación está lista para el paso de escritura en base de datos.")
+        if st.button(
+            "Importar Excel histórico",
+            type="primary",
+            disabled=not user_confirmed,
+        ):
+            try:
+                result = confirm_historical_excel_import_from_preview(
+                    session_factory,
+                    user_profile_id=selected_profile_id,
+                    preview=preview,
+                    confirmed_by=confirmed_by.strip(),
+                    user_confirmed=user_confirmed,
+                    category_id_overrides_by_source_name=category_mapping_overrides,
+                )
+            except (IntegrityError, ValueError) as exc:
+                st.error(str(exc))
+                return
+            st.session_state.pop(HISTORICAL_EXCEL_PREVIEW_KEY, None)
+            flash_success(
+                "historical_import",
+                "Importación completada: "
+                f"{result.transaction_count} transacciones.",
+            )
+            st.rerun()
 
 
 def historical_import_validation_blockers(preview: HistoricalExcelPreview) -> list[str]:
@@ -687,12 +743,6 @@ def completed_historical_import_batch(
 ):
     with session_scope(session_factory) as session:
         repository = AccountingRepository(session)
-        if hasattr(repository, "get_completed_import_batch_by_file_hash"):
-            return repository.get_completed_import_batch_by_file_hash(
-                user_profile_id=user_profile_id,
-                source_system=ImportSourceSystem.EXCEL_HISTORICAL,
-                source_file_hash=source_file_hash,
-            )
         return completed_historical_import_batch_fallback(
             repository,
             user_profile_id=user_profile_id,
@@ -715,6 +765,188 @@ def completed_historical_import_batch_fallback(
         ),
     )
     return repository.session.scalar(statement.order_by(ImportBatch.imported_at.desc()))
+
+
+def confirm_historical_excel_import_from_preview(
+    session_factory,
+    *,
+    user_profile_id: int,
+    preview: HistoricalExcelPreview,
+    confirmed_by: str,
+    user_confirmed: bool,
+    category_id_overrides_by_source_name: dict[str, int] | None = None,
+):
+    with session_scope(session_factory) as session:
+        service = HistoricalExcelImportService(AccountingRepository(session))
+        result = service.confirm_import(
+            user_profile_id=user_profile_id,
+            preview=preview,
+            confirmed_by=confirmed_by,
+            user_confirmed=user_confirmed,
+            category_id_overrides_by_source_name=(
+                category_id_overrides_by_source_name
+            ),
+        )
+        session.flush()
+        return result
+
+
+def render_historical_category_mapping_controls(
+    categories,
+    category_plan: list[dict],
+    category_mapping_suggestions: dict[str, int] | None = None,
+) -> dict[str, int]:
+    rows_to_resolve = [
+        row for row in category_plan if row["acción"] in {"crear", "conflicto"}
+    ]
+    if not rows_to_resolve:
+        return {}
+
+    st.subheader("Resolver categorías")
+    category_id_overrides = {}
+    active_categories = [category for category in categories if category.is_active]
+    for row in rows_to_resolve:
+        compatible_categories = [
+            category
+            for category in active_categories
+            if category.category_type.value == row["tipo"]
+        ]
+        suggested_category_id = (category_mapping_suggestions or {}).get(
+            row["categoría Excel"]
+        )
+        selected_category_id = historical_category_mapping_selectbox(
+            row,
+            compatible_categories,
+            suggested_category_id=suggested_category_id,
+        )
+        if selected_category_id is not None:
+            category_id_overrides[row["categoría Excel"]] = selected_category_id
+    return category_id_overrides
+
+
+def historical_category_mapping_selectbox(
+    row: dict,
+    compatible_categories,
+    *,
+    suggested_category_id: int | None = None,
+) -> int | None:
+    create_option = "__create__"
+    select_option = "__select__"
+    options = [category.id for category in compatible_categories]
+    if row["acción"] == "crear":
+        options = [create_option] + options
+    else:
+        options = [select_option] + options
+
+    labels = {
+        create_option: f"Crear nueva categoría '{row['categoría Excel']}'",
+        select_option: "Selecciona una categoría existente",
+    } | {category.id: category.name for category in compatible_categories}
+    if suggested_category_id in {category.id for category in compatible_categories}:
+        st.caption(f"Sugerencia: {labels[suggested_category_id]}")
+    index = (
+        options.index(suggested_category_id)
+        if suggested_category_id in options
+        else 0
+    )
+    selected_value = st.selectbox(
+        f"Categoría destino para {row['categoría Excel']}",
+        options=options,
+        format_func=labels.get,
+        index=index,
+        key=f"historical_category_mapping_{row['categoría Excel']}",
+    )
+    return selected_value if isinstance(selected_value, int) else None
+
+
+def historical_category_mapping_suggestions(
+    session_factory,
+    *,
+    user_profile_id: int,
+    category_plan: list[dict],
+) -> dict[str, int]:
+    rows_to_resolve = [
+        row for row in category_plan if row["acción"] in {"crear", "conflicto"}
+    ]
+    if not rows_to_resolve:
+        return {}
+
+    suggestions = {}
+    with session_scope(session_factory) as session:
+        repository = AccountingRepository(session)
+        for row in rows_to_resolve:
+            source_category_key = normalize_category_label_for_import(
+                row["categoría Excel"]
+            )
+            if hasattr(repository, "list_category_mapping_suggestions"):
+                mapping_suggestions = repository.list_category_mapping_suggestions(
+                    user_profile_id=user_profile_id,
+                    source_system=ImportSourceSystem.EXCEL_HISTORICAL,
+                    source_category_key=source_category_key,
+                )
+            else:
+                mapping_suggestions = historical_category_mapping_suggestions_fallback(
+                    repository,
+                    user_profile_id=user_profile_id,
+                    source_category_key=source_category_key,
+                )
+            compatible_mapping = next(
+                (
+                    mapping
+                    for mapping in mapping_suggestions
+                    if mapping.target_category.is_active
+                    and mapping.target_category.category_type.value == row["tipo"]
+                ),
+                None,
+            )
+            if compatible_mapping is not None:
+                suggestions[row["categoría Excel"]] = compatible_mapping.target_category_id
+    return suggestions
+
+
+def historical_category_mapping_suggestions_fallback(
+    repository: AccountingRepository,
+    *,
+    user_profile_id: int,
+    source_category_key: str,
+):
+    statement = (
+        select(CategoryMapping)
+        .join(Category)
+        .where(
+            CategoryMapping.user_profile_id == user_profile_id,
+            CategoryMapping.source_system == ImportSourceSystem.EXCEL_HISTORICAL,
+            CategoryMapping.source_category_key == source_category_key,
+            Category.is_active.is_(True),
+        )
+        .order_by(CategoryMapping.updated_at.desc(), CategoryMapping.id.desc())
+    )
+    return list(repository.session.scalars(statement))
+
+
+def apply_historical_category_mapping_to_plan(
+    category_plan: list[dict],
+    categories,
+    category_id_overrides_by_source_name: dict[str, int],
+) -> list[dict]:
+    categories_by_id = {category.id: category for category in categories}
+    resolved_rows = []
+    for row in category_plan:
+        category_id = category_id_overrides_by_source_name.get(row["categoría Excel"])
+        if category_id is None:
+            resolved_rows.append(row)
+            continue
+        category = categories_by_id[category_id]
+        resolved_rows.append(
+            {
+                "categoría Excel": row["categoría Excel"],
+                "acción": "mapear",
+                "categoría LXCell": category.name,
+                "tipo": category.category_type.value,
+                "clave": category.canonical_key,
+            }
+        )
+    return resolved_rows
 
 
 def historical_category_import_plan(categories, preview: HistoricalExcelPreview) -> list[dict]:
@@ -740,12 +972,25 @@ def historical_category_import_plan(categories, preview: HistoricalExcelPreview)
         )
 
         matched_category = categories_by_normalized_name.get(normalized_name)
-        if matched_category is not None:
+        if matched_category is not None and matched_category.is_active:
             rows.append(
                 {
                     "categoría Excel": source_category_name,
                     "acción": "reutilizar",
                     "categoría LXCell": matched_category.name,
+                    "tipo": matched_category.category_type.value,
+                    "clave": matched_category.canonical_key,
+                }
+            )
+            continue
+        if matched_category is not None and not matched_category.is_active:
+            rows.append(
+                {
+                    "categoría Excel": source_category_name,
+                    "acción": "conflicto",
+                    "categoría LXCell": category_label_for_transaction_table(
+                        matched_category
+                    ),
                     "tipo": matched_category.category_type.value,
                     "clave": matched_category.canonical_key,
                 }
@@ -1139,6 +1384,18 @@ def transaction_table_rows(
         }
         for transaction in transactions
     ]
+
+
+def account_label_for_transaction_table(account) -> str:
+    if account.is_active:
+        return account.name
+    return f"{account.name} (eliminada)"
+
+
+def category_label_for_transaction_table(category) -> str:
+    if category.is_active:
+        return category.name
+    return f"{category.name} (eliminada)"
 
 
 def apply_transaction_table_changes(

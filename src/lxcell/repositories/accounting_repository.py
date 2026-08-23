@@ -11,6 +11,7 @@ from lxcell.db.models import (
     Budget,
     BudgetLine,
     Category,
+    CategoryMapping,
     ClassificationDecision,
     ImportBatch,
     ImportedTransactionSource,
@@ -20,6 +21,7 @@ from lxcell.db.models import (
 from lxcell.enums.core_enums import (
     AccountType,
     BudgetPeriodType,
+    CategoryMappingStatus,
     CategoryType,
     ClassificationDecisionSource,
     ClassificationDecisionStatus,
@@ -125,6 +127,74 @@ class AccountingRepository:
         )
         self.session.add(category)
         return category
+
+    def add_category_mapping(
+        self,
+        *,
+        user_profile_id: int,
+        source_system: ImportSourceSystem,
+        source_file_hash: str,
+        source_category_name: str,
+        source_category_key: str,
+        source_column_kind: str,
+        target_category_id: int,
+        source_file_name: str | None = None,
+        created_from_import_batch_id: int | None = None,
+        mapping_status: CategoryMappingStatus = CategoryMappingStatus.CONFIRMED,
+        notes: str | None = None,
+    ) -> CategoryMapping:
+        category_mapping = CategoryMapping(
+            user_profile_id=user_profile_id,
+            source_system=source_system,
+            source_file_hash=source_file_hash,
+            source_file_name=source_file_name,
+            source_category_name=source_category_name,
+            source_category_key=source_category_key,
+            source_column_kind=source_column_kind,
+            target_category_id=target_category_id,
+            created_from_import_batch_id=created_from_import_batch_id,
+            mapping_status=mapping_status,
+            notes=notes,
+        )
+        self.session.add(category_mapping)
+        return category_mapping
+
+    def get_category_mapping_for_source(
+        self,
+        *,
+        user_profile_id: int,
+        source_system: ImportSourceSystem,
+        source_file_hash: str,
+        source_category_key: str,
+    ) -> CategoryMapping | None:
+        statement = select(CategoryMapping).where(
+            CategoryMapping.user_profile_id == user_profile_id,
+            CategoryMapping.source_system == source_system,
+            CategoryMapping.source_file_hash == source_file_hash,
+            CategoryMapping.source_category_key == source_category_key,
+        )
+        return self.session.scalar(statement)
+
+    def list_category_mapping_suggestions(
+        self,
+        *,
+        user_profile_id: int,
+        source_system: ImportSourceSystem,
+        source_category_key: str,
+    ) -> list[CategoryMapping]:
+        statement = (
+            select(CategoryMapping)
+            .join(Category)
+            .where(
+                CategoryMapping.user_profile_id == user_profile_id,
+                CategoryMapping.source_system == source_system,
+                CategoryMapping.source_category_key == source_category_key,
+                CategoryMapping.mapping_status == CategoryMappingStatus.CONFIRMED,
+                Category.is_active.is_(True),
+            )
+            .order_by(CategoryMapping.updated_at.desc(), CategoryMapping.id.desc())
+        )
+        return list(self.session.scalars(statement))
 
     def list_categories(
         self, user_profile_id: int, *, include_inactive: bool = False
@@ -235,6 +305,39 @@ class AccountingRepository:
         )
         return self.session.scalar(statement.order_by(ImportBatch.imported_at.desc()))
 
+    def get_import_batch(
+        self, *, import_batch_id: int, user_profile_id: int
+    ) -> ImportBatch | None:
+        statement = select(ImportBatch).where(
+            ImportBatch.id == import_batch_id,
+            ImportBatch.user_profile_id == user_profile_id,
+        )
+        return self.session.scalar(statement)
+
+    def get_imported_source_by_normalized_hash(
+        self,
+        *,
+        user_profile_id: int,
+        source_system: ImportSourceSystem,
+        normalized_hash: str,
+    ) -> ImportedTransactionSource | None:
+        statement = (
+            select(ImportedTransactionSource)
+            .join(ImportBatch)
+            .where(
+                ImportBatch.user_profile_id == user_profile_id,
+                ImportBatch.source_system == source_system,
+                ImportBatch.import_status.in_(
+                    [
+                        ImportStatus.COMPLETED,
+                        ImportStatus.COMPLETED_WITH_WARNINGS,
+                    ]
+                ),
+                ImportedTransactionSource.normalized_hash == normalized_hash,
+            )
+        )
+        return self.session.scalar(statement.order_by(ImportedTransactionSource.id))
+
     def add_imported_transaction_source(
         self,
         *,
@@ -265,6 +368,14 @@ class AccountingRepository:
         )
         self.session.add(imported_source)
         return imported_source
+
+    def list_imported_transaction_sources(
+        self, *, import_batch_id: int
+    ) -> list[ImportedTransactionSource]:
+        statement = select(ImportedTransactionSource).where(
+            ImportedTransactionSource.import_batch_id == import_batch_id
+        )
+        return list(self.session.scalars(statement.order_by(ImportedTransactionSource.id)))
 
     def get_transaction(
         self, *, transaction_id: int, user_profile_id: int

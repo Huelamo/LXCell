@@ -644,9 +644,13 @@ Key fields:
 - `id`
 - `user_profile_id`
 - `source_system`
-- `source_year`
+- `source_file_hash`
+- `source_file_name`
 - `source_category_name`
+- `source_category_key`
+- `source_column_kind`
 - `target_category_id`
+- `created_from_import_batch_id`
 - `mapping_status`
 - `notes`
 - `created_at`
@@ -663,6 +667,12 @@ Rules:
 - The 2026 category structure should be the forward-looking target.
 - Mappings should be explicit, especially where historical category meanings changed.
 - Validation reports should show any unmapped categories.
+- Historical Excel mappings are scoped to a concrete source file hash, not
+  global by profile or year.
+- The same source category key in another workbook can be suggested from prior
+  confirmed mappings, but the user should still review it before import.
+- Multiple source categories from the same file can map to the same target
+  category.
 
 ### ExcelWorkbookImport
 
@@ -762,6 +772,7 @@ The first implementation should include:
 - `classification_decisions`
 - `budgets`
 - `budget_lines`
+- `category_mappings`
 
 Can be deferred:
 
@@ -769,13 +780,16 @@ Can be deferred:
 - `transfer_links`
 - `savings_goals`
 - `merchants`
-- `category_mappings`
 - `excel_workbook_imports`
 - `import_validation_issues`
 
 Deferring an entity should not block the schema from adding it later without rewriting transaction history.
 
-`merchants` are intentionally deferred from the first implementation schema, but they remain a planned concept for automation. Merchant normalization should be revisited before building classification automation beyond simple description-based rules.
+`category_mappings` were added during Phase 2 historical Excel import work to
+preserve file-scoped category interpretation traceability. `merchants` are
+intentionally deferred from the first implementation schema, but they remain a
+planned concept for automation. Merchant normalization should be revisited
+before building classification automation beyond simple description-based rules.
 
 ## Proposal Review Status
 
@@ -786,11 +800,11 @@ Accepted for Phase 1:
 - Represent shared accounts as `Account.ownership_type = shared`.
 - Represent manual entries through `ImportBatch.source_system = manual_entry`.
 - Do not seed real personal category sets in the public repository.
-- Defer `transaction_splits`, `transfer_links`, `savings_goals`, `merchants`, `category_mappings`, `excel_workbook_imports`, and `import_validation_issues` from the first implementation schema.
+- Defer `transaction_splits`, `transfer_links`, `savings_goals`, `merchants`, `excel_workbook_imports`, and `import_validation_issues` from the first implementation schema.
+- Add `category_mappings` during Phase 2 historical Excel import work, scoped to source file hash.
 
 Still open:
 
 - When should `merchants` be introduced to support classification automation?
-- Should category mappings be implemented during Phase 1 or as part of the historical Excel importer in Phase 2?
 - Which generic category fixtures should be used for public tests?
 - When should Alembic be introduced for schema migrations?

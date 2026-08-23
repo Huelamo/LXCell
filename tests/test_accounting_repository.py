@@ -8,6 +8,7 @@ from lxcell.db.session import create_session_factory, create_sqlite_engine, sess
 from lxcell.enums.core_enums import (
     AccountType,
     BudgetPeriodType,
+    CategoryMappingStatus,
     CategoryType,
     ClassificationDecisionSource,
     ClassificationDecisionStatus,
@@ -280,6 +281,57 @@ def test_repository_finds_completed_import_batch_by_hash(session_factory):
 
     assert found_batch.id == completed_batch.id
     assert pending_batch is None
+
+
+def test_repository_creates_file_scoped_category_mapping_and_suggestions(
+    session_factory,
+):
+    with session_scope(session_factory) as session:
+        repository = AccountingRepository(session)
+        user_profile = repository.add_user_profile(display_name="Sample User")
+        session.flush()
+        target_category = repository.add_category(
+            user_profile_id=user_profile.id,
+            name="Combined Category",
+            category_type=CategoryType.EXPENSE,
+            canonical_key="combined_category",
+        )
+        batch = repository.add_import_batch(
+            user_profile_id=user_profile.id,
+            source_system=ImportSourceSystem.EXCEL_HISTORICAL,
+            source_file_hash="abc123",
+            import_status=ImportStatus.COMPLETED,
+        )
+        session.flush()
+        mapping = repository.add_category_mapping(
+            user_profile_id=user_profile.id,
+            source_system=ImportSourceSystem.EXCEL_HISTORICAL,
+            source_file_hash="abc123",
+            source_file_name="sample.xlsx",
+            source_category_name="Legacy Category",
+            source_category_key="legacy category",
+            source_column_kind="expense",
+            target_category_id=target_category.id,
+            created_from_import_batch_id=batch.id,
+        )
+
+    with session_scope(session_factory) as session:
+        repository = AccountingRepository(session)
+        stored_mapping = repository.get_category_mapping_for_source(
+            user_profile_id=user_profile.id,
+            source_system=ImportSourceSystem.EXCEL_HISTORICAL,
+            source_file_hash="abc123",
+            source_category_key="legacy category",
+        )
+        suggestions = repository.list_category_mapping_suggestions(
+            user_profile_id=user_profile.id,
+            source_system=ImportSourceSystem.EXCEL_HISTORICAL,
+            source_category_key="legacy category",
+        )
+
+    assert stored_mapping.id == mapping.id
+    assert stored_mapping.mapping_status == CategoryMappingStatus.CONFIRMED
+    assert [suggestion.id for suggestion in suggestions] == [mapping.id]
 
 
 def test_repository_lists_classification_decisions_through_profile_scope(

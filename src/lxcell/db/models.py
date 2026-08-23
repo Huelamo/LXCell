@@ -23,6 +23,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from lxcell.enums.core_enums import (
     AccountType,
     BudgetPeriodType,
+    CategoryMappingStatus,
     CategoryType,
     ClassificationDecisionSource,
     ClassificationDecisionStatus,
@@ -86,6 +87,9 @@ class UserProfile(IdMixin, TimestampMixin, Base):
 
     accounts: Mapped[list["Account"]] = relationship(back_populates="user_profile")
     categories: Mapped[list["Category"]] = relationship(back_populates="user_profile")
+    category_mappings: Mapped[list["CategoryMapping"]] = relationship(
+        back_populates="user_profile", overlaps="category"
+    )
     transactions: Mapped[list["Transaction"]] = relationship(
         back_populates="user_profile", overlaps="account,category"
     )
@@ -163,6 +167,9 @@ class Category(IdMixin, TimestampMixin, Base):
         back_populates="category"
     )
     budget_lines: Mapped[list["BudgetLine"]] = relationship(back_populates="category")
+    source_category_mappings: Mapped[list["CategoryMapping"]] = relationship(
+        back_populates="target_category", overlaps="category_mappings,user_profile"
+    )
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -172,6 +179,56 @@ class Category(IdMixin, TimestampMixin, Base):
         UniqueConstraint("id", "user_profile_id"),
         UniqueConstraint("user_profile_id", "name"),
         UniqueConstraint("user_profile_id", "canonical_key"),
+    )
+
+
+class CategoryMapping(IdMixin, TimestampMixin, Base):
+    """Mapping from a historical source category to an LXCell category."""
+
+    __tablename__ = "category_mappings"
+
+    user_profile_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id"), nullable=False)
+    source_system: Mapped[ImportSourceSystem] = mapped_column(
+        enum_type(ImportSourceSystem), nullable=False
+    )
+    source_file_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_file_name: Mapped[str | None] = mapped_column(String(500))
+    source_category_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    source_category_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    source_column_kind: Mapped[str] = mapped_column(String(50), nullable=False)
+    target_category_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_from_import_batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("import_batches.id")
+    )
+    mapping_status: Mapped[CategoryMappingStatus] = mapped_column(
+        enum_type(CategoryMappingStatus),
+        default=CategoryMappingStatus.CONFIRMED,
+        nullable=False,
+    )
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    user_profile: Mapped[UserProfile] = relationship(
+        back_populates="category_mappings", overlaps="target_category"
+    )
+    target_category: Mapped[Category] = relationship(
+        back_populates="source_category_mappings",
+        overlaps="category_mappings,user_profile",
+    )
+    created_from_import_batch: Mapped["ImportBatch | None"] = relationship(
+        back_populates="category_mappings"
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["target_category_id", "user_profile_id"],
+            ["categories.id", "categories.user_profile_id"],
+        ),
+        UniqueConstraint(
+            "user_profile_id",
+            "source_system",
+            "source_file_hash",
+            "source_category_key",
+        ),
     )
 
 
@@ -269,6 +326,9 @@ class ImportBatch(IdMixin, TimestampMixin, Base):
     )
     imported_transaction_sources: Mapped[list["ImportedTransactionSource"]] = relationship(
         back_populates="import_batch"
+    )
+    category_mappings: Mapped[list[CategoryMapping]] = relationship(
+        back_populates="created_from_import_batch"
     )
 
     __table_args__ = (
@@ -453,6 +513,7 @@ __all__ = [
     "Budget",
     "BudgetLine",
     "Category",
+    "CategoryMapping",
     "ClassificationDecision",
     "ClassificationRule",
     "IdMixin",
