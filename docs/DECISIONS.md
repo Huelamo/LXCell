@@ -239,3 +239,37 @@ Decision: add a minimal local Streamlit UI in `src/lxcell/ui/streamlit_app.py` f
 Reason: a UI is more practical than the CLI for day-to-day manual entry. The backend now has enough reviewed behavior to expose a small local interface without inventing new financial logic in the presentation layer.
 
 Implication: the UI uses `data/lxcell.db` by default and routes writes through `AccountingService` and `AccountingRepository`. Successful writes show a visible confirmation after Streamlit reruns. If a manual transaction matches an existing registered transaction exactly by date, account, category, description, amount, currency, direction, transaction type, and payment method, the UI asks for explicit duplicate confirmation before writing another row. Transaction edits are made directly in the transactions table and then saved in batch. Classification-changing edits supersede previous classification decisions and create a new accepted manual decision when a category is assigned. Transaction delete actions are soft deletes through `transactions.is_deleted`, not hard deletes. Category edits are made directly in a categories table and can update name, type, display order, and active state. Category delete actions set `categories.is_active = false`, preserving historical transaction links; inactive categories disappear from the normal UI and remain visible only in the advanced category view. In the advanced category view, `estado` is read-only and `acción` is the editable user intent: active categories can be removed from active use, and inactive categories can be reactivated. `canonical_key` is generated automatically from the name on creation, preserved during normal renames, and shown/editable only in an advanced view. It remains a local Phase 1 interface, not the final product UI. Importers, richer review screens, and polished reporting remain later work.
+
+## 2026-08-22 - Phase 2 Historical Excel Dry-Run Preview
+
+Decision: begin historical Excel import with a read-only dry-run parser in `src/lxcell/importers/excel_historical.py`. The parser opens the `Registro` sheet with `openpyxl`, detects a date header row, treats numeric category columns as historical transaction candidates, computes source file hash metadata, and returns preview summaries without writing to the database. Source spreadsheet amounts are preserved separately from signed accounting impact. Expense columns treat positive source amounts as outflows and negative source amounts as inflows for refunds. Income columns treat positive source amounts as inflows and negative source amounts as outflows for reversals. Income columns are detected from green header fill first, then from generic income-like header names.
+
+Reason: historical workbooks are trusted source material and should not be mutated or imported blindly. A dry-run preview lets the user inspect source categories, parsed candidate transactions, monthly/category totals, and ignored rows before any `ImportBatch` or `Transaction` records are created.
+
+Implication: Phase 2 is now in progress. The first importer produces in-memory `HistoricalExcelPreview` and `HistoricalExcelTransactionCandidate` objects only. Category mapping, duplicate detection, confirmed DB import, budget import, validation against `Seguimiento`, and confirmed-import UI behavior remain separate follow-up blocks. Real personal finance workbooks must remain uncommitted; tests use anonymized synthetic workbooks.
+
+Detailed review log: `docs/phase_2_historical_excel_import.md`.
+
+## 2026-08-23 - Phase 2 Local Historical Excel Preview UI
+
+Decision: expose the historical Excel dry-run parser in the local Streamlit UI through an `Importar` tab. The UI accepts a `.xlsx` upload, reads a selected sheet name, writes only a temporary copy for parsing, displays preview metrics and candidate tables, and deletes the temporary copy after parsing.
+
+Reason: the user needs a visible workflow for checking whether historical workbooks are understood by LXCell before category mapping and database import are designed.
+
+Implication: the local import UI remains preview-only. It does not create import batches, transactions, category mappings, or validation rows. Confirmed database import, duplicate handling, source-category mapping, and persisted validation records remain later Phase 2 blocks.
+
+## 2026-08-23 - Phase 2 Seguimiento Aggregate Validation
+
+Decision: during historical Excel preview, read the `Seguimiento` sheet when present and compare its first monthly spending-by-category table against expense aggregates calculated from `Registro`. Income categories from `Registro` are intentionally excluded from this first-table validation because historical income summaries live in a later `Seguimiento` table that is deferred. The comparison uses source spreadsheet amounts, matches categories by normalized names, stops before annual totals and later analysis/budget tables, compares by month and source category, aggregates raw `Registro` amounts before rounding to minor units, and allows a one-cent tolerance.
+
+Reason: the historical workbooks are the trusted reference system. Comparing LXCell's parsed `Registro` aggregates against `Seguimiento` gives an early acceptance test for date parsing, category matching, amount signs, and aggregation behavior before any records are written.
+
+Implication: validation results are displayed in the local UI as matches and differences by month/category, plus unmatched expense categories at header level only. This remains dry-run only: no import batches, transactions, mappings, or validation rows are persisted yet. Workbooks with formulas must have cached values available for `openpyxl` `data_only=True` reads.
+
+## 2026-08-23 - Phase 2 Historical Import Preparation
+
+Decision: add a read-only preparation step before confirmed historical Excel import. Historical Excel rows are treated as mixed-account historical data and will use a technical per-profile account named `Excel histórico` when the write step is implemented. Category names from the workbook can seed the user's category set: existing categories are reused by normalized name, missing categories are planned for creation, and canonical-key collisions are shown as conflicts. Completed imports are detected by profile, `source_system = excel_historical`, and source file hash.
+
+Reason: historical workbooks did not track the originating bank account per movement, so a technical account is more accurate than inventing provenance. Category creation from the workbook matches the expected migration path for users whose category set already lives in Excel. File-hash checks prevent accidental double import without blocking corrected workbooks whose contents have changed.
+
+Implication: the UI can now show whether an import is ready, which technical account will be used, which categories will be reused or created, and whether the file hash has already been imported. The actual database write remains deferred until the final confirmation workflow is implemented.

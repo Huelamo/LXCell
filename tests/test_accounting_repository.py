@@ -12,6 +12,8 @@ from lxcell.enums.core_enums import (
     ClassificationDecisionSource,
     ClassificationDecisionStatus,
     Direction,
+    ImportSourceSystem,
+    ImportStatus,
     TransactionReviewStatus,
     TransactionSourceType,
     TransactionType,
@@ -235,6 +237,49 @@ def test_repository_filters_transactions_by_date_and_review_status(session_facto
         )
 
     assert [transaction.amount_minor for transaction in transactions] == [2000]
+
+
+def test_repository_finds_completed_import_batch_by_hash(session_factory):
+    with session_scope(session_factory) as session:
+        repository = AccountingRepository(session)
+        user_profile = repository.add_user_profile(display_name="Sample User")
+        other_profile = repository.add_user_profile(display_name="Other User")
+        session.flush()
+
+        completed_batch = repository.add_import_batch(
+            user_profile_id=user_profile.id,
+            source_system=ImportSourceSystem.EXCEL_HISTORICAL,
+            source_file_hash="abc123",
+            import_status=ImportStatus.COMPLETED,
+        )
+        repository.add_import_batch(
+            user_profile_id=user_profile.id,
+            source_system=ImportSourceSystem.EXCEL_HISTORICAL,
+            source_file_hash="pending123",
+            import_status=ImportStatus.PENDING,
+        )
+        repository.add_import_batch(
+            user_profile_id=other_profile.id,
+            source_system=ImportSourceSystem.EXCEL_HISTORICAL,
+            source_file_hash="abc123",
+            import_status=ImportStatus.COMPLETED,
+        )
+
+    with session_scope(session_factory) as session:
+        repository = AccountingRepository(session)
+        found_batch = repository.get_completed_import_batch_by_file_hash(
+            user_profile_id=user_profile.id,
+            source_system=ImportSourceSystem.EXCEL_HISTORICAL,
+            source_file_hash="abc123",
+        )
+        pending_batch = repository.get_completed_import_batch_by_file_hash(
+            user_profile_id=user_profile.id,
+            source_system=ImportSourceSystem.EXCEL_HISTORICAL,
+            source_file_hash="pending123",
+        )
+
+    assert found_batch.id == completed_batch.id
+    assert pending_batch is None
 
 
 def test_repository_lists_classification_decisions_through_profile_scope(

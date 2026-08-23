@@ -2,29 +2,41 @@
 
 from __future__ import annotations
 
+import hashlib
+import importlib
+import re
+import unicodedata
 from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 import pandas as pd
 import streamlit as st
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from lxcell.db.models import Category
+from lxcell.db.models import Category, ImportBatch, Transaction
 from lxcell.db.runtime import DEFAULT_DATABASE_PATH, create_local_session_factory
 from lxcell.db.session import session_scope
 from lxcell.enums.core_enums import (
     AccountType,
     CategoryType,
     Direction,
+    ImportSourceSystem,
+    ImportStatus,
     OwnershipType,
     PaymentMethod,
     TransactionType,
 )
+from lxcell.importers import HistoricalExcelPreview
 from lxcell.repositories import AccountingRepository
 from lxcell.services import AccountingService
 
 PENDING_DUPLICATE_TRANSACTION_KEY = "lxcell_pending_duplicate_transaction"
+HISTORICAL_EXCEL_PREVIEW_KEY = "lxcell_historical_excel_preview"
+HISTORICAL_EXCEL_PREVIEW_VERSION = 5
+HISTORICAL_EXCEL_ACCOUNT_NAME = "Excel histórico"
 
 
 def run() -> None:
@@ -39,8 +51,8 @@ def run() -> None:
     profiles = load_profiles(session_factory)
     selected_profile_id = profile_selector(profiles)
 
-    setup_tab, transaction_tab, review_tab, categories_tab = st.tabs(
-        ["Configuración", "Registrar", "Transacciones", "Categorías"]
+    setup_tab, transaction_tab, review_tab, categories_tab, import_tab = st.tabs(
+        ["Configuración", "Registrar", "Transacciones", "Categorías", "Importar"]
     )
 
     with setup_tab:
@@ -51,6 +63,8 @@ def run() -> None:
         render_transactions(session_factory, selected_profile_id)
     with categories_tab:
         render_categories(session_factory, selected_profile_id)
+    with import_tab:
+        render_import_preview(session_factory, selected_profile_id)
 
 
 def render_setup(session_factory, selected_profile_id: int | None) -> None:
@@ -441,6 +455,476 @@ def render_categories(session_factory, selected_profile_id: int | None) -> None:
         st.rerun()
 
 
+def render_import_preview(session_factory, selected_profile_id: int | None) -> None:
+    if selected_profile_id is None:
+        st.info("Selecciona un perfil para previsualizar importaciones.")
+        return
+
+    st.subheader("Importar Excel histórico")
+    uploaded_file = st.file_uploader("Archivo .xlsx", type=["xlsx"])
+    sheet_name = st.text_input("Hoja", value="Registro")
+
+    if uploaded_file is None:
+        st.session_state.pop(HISTORICAL_EXCEL_PREVIEW_KEY, None)
+        return
+
+    resolved_sheet_name = resolve_historical_sheet_name(sheet_name)
+    upload_signature = uploaded_file_signature(uploaded_file, resolved_sheet_name)
+    if st.button("Previsualizar Excel", type="primary"):
+        try:
+            preview = preview_uploaded_historical_excel(
+                uploaded_file,
+                sheet_name=resolved_sheet_name,
+            )
+        except ValueError as exc:
+            st.error(str(exc))
+            return
+        st.session_state[HISTORICAL_EXCEL_PREVIEW_KEY] = {
+            "preview": preview,
+            "signature": upload_signature,
+            "version": HISTORICAL_EXCEL_PREVIEW_VERSION,
+        }
+
+    stored_preview = st.session_state.get(HISTORICAL_EXCEL_PREVIEW_KEY)
+    if stored_historical_preview_matches(stored_preview, upload_signature):
+        render_historical_excel_preview(stored_preview["preview"])
+        render_historical_import_preparation(
+            session_factory,
+            selected_profile_id,
+            stored_preview["preview"],
+        )
+    elif stored_preview is not None:
+        st.session_state.pop(HISTORICAL_EXCEL_PREVIEW_KEY, None)
+        st.info("La previsualización anterior ha caducado. Pulsa de nuevo Previsualizar Excel.")
+
+
+def preview_uploaded_historical_excel(uploaded_file, *, sheet_name: str):
+    with NamedTemporaryFile(delete=False, suffix=".xlsx") as temporary_file:
+        temporary_path = Path(temporary_file.name)
+        temporary_file.write(uploaded_file.getbuffer())
+
+    try:
+        importer_module = importlib.import_module("lxcell.importers.excel_historical")
+        importer_module = importlib.reload(importer_module)
+        return importer_module.HistoricalExcelDryRunImporter(
+            sheet_name=sheet_name
+        ).preview(temporary_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def resolve_historical_sheet_name(sheet_name: str) -> str:
+    return sheet_name.strip() or "Registro"
+
+
+def uploaded_file_signature(uploaded_file, sheet_name: str) -> tuple[str, str, str]:
+    digest = hashlib.sha256(uploaded_file.getbuffer()).hexdigest()
+    return uploaded_file.name, sheet_name, digest
+
+
+def stored_historical_preview_matches(
+    stored_preview,
+    upload_signature: tuple[str, str, str],
+) -> bool:
+    preview = stored_preview.get("preview") if isinstance(stored_preview, dict) else None
+    return (
+        isinstance(stored_preview, dict)
+        and stored_preview.get("version") == HISTORICAL_EXCEL_PREVIEW_VERSION
+        and stored_preview.get("signature") == upload_signature
+        and historical_preview_can_render(preview)
+    )
+
+
+def historical_preview_can_render(preview) -> bool:
+    return (
+        preview is not None
+        and hasattr(preview, "candidates")
+        and hasattr(preview, "ignored_row_numbers")
+        and hasattr(preview, "source_categories")
+    )
+
+
+def render_historical_excel_preview(preview: HistoricalExcelPreview) -> None:
+    st.success("Excel leído en modo previsualización. No se ha guardado nada.")
+
+    candidate_column, category_column, ignored_column = st.columns(3)
+    candidate_column.metric("Candidatos", preview.transaction_count)
+    category_column.metric("Categorías origen", len(preview.source_categories))
+    ignored_column.metric("Filas ignoradas", len(preview.ignored_row_numbers))
+
+    st.caption(
+        f"Hoja: {preview.sheet_name} · "
+        f"cabecera: fila {preview.header_row_number} · "
+        f"hash: {preview.source_file_hash[:12]}"
+    )
+
+    totals_by_month = totals_table_rows(source_totals_by_month_minor(preview), "mes")
+    if totals_by_month:
+        st.subheader("Totales Excel por mes")
+        st.dataframe(pd.DataFrame(totals_by_month), use_container_width=True)
+
+    totals_by_category = totals_table_rows(
+        source_totals_by_category_minor(preview),
+        "categoría origen",
+    )
+    if totals_by_category:
+        st.subheader("Totales Excel por categoría origen")
+        st.dataframe(pd.DataFrame(totals_by_category), use_container_width=True)
+
+    candidate_rows = preview_candidate_rows(preview, limit=100)
+    if candidate_rows:
+        st.subheader("Primeros candidatos")
+        st.dataframe(pd.DataFrame(candidate_rows), use_container_width=True)
+
+    render_tracking_validation(preview)
+
+    if preview.ignored_row_numbers:
+        st.caption(
+            "Filas ignoradas: "
+            + ", ".join(str(row_number) for row_number in preview.ignored_row_numbers)
+        )
+
+
+def render_tracking_validation(preview: HistoricalExcelPreview) -> None:
+    validation = getattr(preview, "tracking_validation", None)
+    st.subheader("Validación contra Seguimiento")
+    if validation is None:
+        st.info("No se ha podido leer una validación comparable en Seguimiento.")
+        return
+
+    ok_column, difference_column, unmatched_column = st.columns(3)
+    ok_column.metric("Coincidencias", validation.ok_count)
+    difference_column.metric("Diferencias", validation.difference_count)
+    unmatched_column.metric(
+        "Categorías sin emparejar",
+        len(validation.registro_only_categories)
+        + len(validation.seguimiento_only_categories),
+    )
+
+    comparison_rows = tracking_comparison_rows(validation)
+    if comparison_rows:
+        st.dataframe(pd.DataFrame(comparison_rows), use_container_width=True)
+
+    unmatched_rows = tracking_unmatched_category_rows(validation)
+    if unmatched_rows:
+        st.subheader("Categorías sin emparejar")
+        st.dataframe(pd.DataFrame(unmatched_rows), use_container_width=True)
+
+
+def render_historical_import_preparation(
+    session_factory,
+    selected_profile_id: int,
+    preview: HistoricalExcelPreview,
+) -> None:
+    st.subheader("Preparar importación")
+
+    validation_blockers = historical_import_validation_blockers(preview)
+    duplicate_batch = completed_historical_import_batch(
+        session_factory,
+        user_profile_id=selected_profile_id,
+        source_file_hash=preview.source_file_hash,
+    )
+    categories = load_categories(
+        session_factory,
+        selected_profile_id,
+        include_inactive=True,
+    )
+    category_plan = historical_category_import_plan(categories, preview)
+    category_conflicts = [
+        row for row in category_plan if row["acción"] == "conflicto"
+    ]
+
+    transaction_column, category_column, account_column = st.columns(3)
+    transaction_column.metric("Transacciones", preview.transaction_count)
+    category_column.metric("Categorías nuevas", count_rows_by_action(category_plan, "crear"))
+    account_column.metric("Cuenta destino", HISTORICAL_EXCEL_ACCOUNT_NAME)
+
+    if validation_blockers:
+        for blocker in validation_blockers:
+            st.warning(blocker)
+    if duplicate_batch is not None:
+        st.error("Este archivo ya fue importado correctamente para este perfil.")
+    if category_conflicts:
+        st.warning("Hay conflictos de categorías que requieren revisión.")
+
+    if category_plan:
+        st.dataframe(pd.DataFrame(category_plan), use_container_width=True)
+
+    can_prepare_import = (
+        not validation_blockers
+        and duplicate_batch is None
+        and not category_conflicts
+        and preview.transaction_count > 0
+    )
+    if can_prepare_import:
+        st.checkbox(
+            "Confirmo que quiero preparar la importación de este Excel histórico",
+            key="confirm_historical_excel_import_preparation",
+        )
+        st.success("La importación está lista para el paso de escritura en base de datos.")
+
+
+def historical_import_validation_blockers(preview: HistoricalExcelPreview) -> list[str]:
+    validation = getattr(preview, "tracking_validation", None)
+    if validation is None:
+        return ["La importación requiere validación comparable contra Seguimiento."]
+
+    blockers = []
+    if validation.difference_count:
+        blockers.append("Hay diferencias entre Registro y Seguimiento.")
+    if validation.registro_only_categories:
+        blockers.append("Hay categorías presentes solo en Registro.")
+    if validation.seguimiento_only_categories:
+        blockers.append("Hay categorías presentes solo en Seguimiento.")
+    return blockers
+
+
+def completed_historical_import_batch(
+    session_factory,
+    *,
+    user_profile_id: int,
+    source_file_hash: str,
+):
+    with session_scope(session_factory) as session:
+        repository = AccountingRepository(session)
+        if hasattr(repository, "get_completed_import_batch_by_file_hash"):
+            return repository.get_completed_import_batch_by_file_hash(
+                user_profile_id=user_profile_id,
+                source_system=ImportSourceSystem.EXCEL_HISTORICAL,
+                source_file_hash=source_file_hash,
+            )
+        return completed_historical_import_batch_fallback(
+            repository,
+            user_profile_id=user_profile_id,
+            source_file_hash=source_file_hash,
+        )
+
+
+def completed_historical_import_batch_fallback(
+    repository: AccountingRepository,
+    *,
+    user_profile_id: int,
+    source_file_hash: str,
+):
+    statement = select(ImportBatch).where(
+        ImportBatch.user_profile_id == user_profile_id,
+        ImportBatch.source_system == ImportSourceSystem.EXCEL_HISTORICAL,
+        ImportBatch.source_file_hash == source_file_hash,
+        ImportBatch.import_status.in_(
+            [ImportStatus.COMPLETED, ImportStatus.COMPLETED_WITH_WARNINGS]
+        ),
+    )
+    return repository.session.scalar(statement.order_by(ImportBatch.imported_at.desc()))
+
+
+def historical_category_import_plan(categories, preview: HistoricalExcelPreview) -> list[dict]:
+    categories_by_normalized_name = {
+        normalize_category_label_for_import(category.name): category
+        for category in categories
+    }
+    categories_by_canonical_key = {
+        category.canonical_key: category
+        for category in categories
+    }
+    source_category_kinds = source_category_kinds_by_name(preview)
+
+    rows = []
+    for source_category_name in preview.source_categories:
+        normalized_name = normalize_category_label_for_import(source_category_name)
+        canonical_key = canonical_key_from_name(source_category_name)
+        category_kind = source_category_kinds.get(source_category_name, "expense")
+        category_type = (
+            CategoryType.INCOME.value
+            if category_kind == "income"
+            else CategoryType.EXPENSE.value
+        )
+
+        matched_category = categories_by_normalized_name.get(normalized_name)
+        if matched_category is not None:
+            rows.append(
+                {
+                    "categoría Excel": source_category_name,
+                    "acción": "reutilizar",
+                    "categoría LXCell": matched_category.name,
+                    "tipo": matched_category.category_type.value,
+                    "clave": matched_category.canonical_key,
+                }
+            )
+            continue
+
+        conflicting_category = categories_by_canonical_key.get(canonical_key)
+        if conflicting_category is not None:
+            rows.append(
+                {
+                    "categoría Excel": source_category_name,
+                    "acción": "conflicto",
+                    "categoría LXCell": conflicting_category.name,
+                    "tipo": conflicting_category.category_type.value,
+                    "clave": canonical_key,
+                }
+            )
+            continue
+
+        rows.append(
+            {
+                "categoría Excel": source_category_name,
+                "acción": "crear",
+                "categoría LXCell": source_category_name,
+                "tipo": category_type,
+                "clave": canonical_key,
+            }
+        )
+
+    return rows
+
+
+def source_category_kinds_by_name(preview: HistoricalExcelPreview) -> dict[str, str]:
+    kinds_by_name = {}
+    for candidate in preview.candidates:
+        category_name = candidate.source_category_name
+        category_kind = candidate_source_column_kind(candidate)
+        if category_kind == "income":
+            kinds_by_name[category_name] = "income"
+        else:
+            kinds_by_name.setdefault(category_name, "expense")
+    return kinds_by_name
+
+
+def normalize_category_label_for_import(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value.strip().lower())
+    without_accents = "".join(
+        character
+        for character in normalized
+        if not unicodedata.combining(character)
+    )
+    return " ".join(without_accents.split())
+
+
+def count_rows_by_action(rows: list[dict], action: str) -> int:
+    return sum(1 for row in rows if row["acción"] == action)
+
+
+def preview_candidate_rows(
+    preview: HistoricalExcelPreview,
+    *,
+    limit: int = 100,
+) -> list[dict]:
+    return [
+        {
+            "fila": candidate.row_number_source,
+            "fecha": candidate.transaction_date,
+            "categoría origen": candidate.source_category_name,
+            "tipo columna": (
+                "ingreso"
+                if candidate_source_column_kind(candidate) == "income"
+                else "gasto"
+            ),
+            "importe Excel": format_signed_amount_minor(
+                candidate_source_signed_amount_minor(candidate)
+            ),
+            "dirección": candidate.direction.value,
+            "comentario": candidate.description_raw or "",
+        }
+        for candidate in preview.candidates[:limit]
+    ]
+
+
+def source_totals_by_month_minor(preview: HistoricalExcelPreview) -> dict[str, int]:
+    totals: dict[str, Decimal] = {}
+    for candidate in preview.candidates:
+        month_key = candidate.transaction_date.strftime("%Y-%m")
+        totals[month_key] = totals.get(month_key, Decimal("0")) + (
+            candidate_source_amount_decimal(candidate)
+        )
+    return {
+        month_key: minor_units_from_decimal(amount)
+        for month_key, amount in sorted(totals.items())
+    }
+
+
+def source_totals_by_category_minor(preview: HistoricalExcelPreview) -> dict[str, int]:
+    totals: dict[str, Decimal] = {}
+    for candidate in preview.candidates:
+        category_key = candidate.source_category_name
+        totals[category_key] = totals.get(
+            category_key,
+            Decimal("0"),
+        ) + candidate_source_amount_decimal(candidate)
+    return {
+        category_key: minor_units_from_decimal(amount)
+        for category_key, amount in sorted(totals.items())
+    }
+
+
+def tracking_comparison_rows(validation) -> list[dict]:
+    return [
+        {
+            "mes": comparison.month_key,
+            "categoría origen": comparison.source_category_name,
+            "Registro": format_signed_amount_minor(comparison.registro_amount_minor),
+            "Seguimiento": format_signed_amount_minor(
+                comparison.seguimiento_amount_minor
+            ),
+            "diferencia": format_signed_amount_minor(comparison.difference_minor),
+            "estado": "ok" if comparison.status == "ok" else "diferencia",
+        }
+        for comparison in validation.comparisons
+    ]
+
+
+def tracking_unmatched_category_rows(validation) -> list[dict]:
+    rows = [
+        {
+            "categoría": category_name,
+            "aparece en": "Registro",
+        }
+        for category_name in validation.registro_only_categories
+    ]
+    rows.extend(
+        {
+            "categoría": category_name,
+            "aparece en": "Seguimiento",
+        }
+        for category_name in validation.seguimiento_only_categories
+    )
+    return sorted(rows, key=lambda row: (row["categoría"], row["aparece en"]))
+
+
+def candidate_source_column_kind(candidate) -> str:
+    return getattr(candidate, "source_column_kind", "expense")
+
+
+def candidate_source_signed_amount_minor(candidate) -> int:
+    source_amount_minor = getattr(candidate, "source_amount_minor", None)
+    if source_amount_minor is not None:
+        return source_amount_minor
+    return abs(candidate.amount_minor)
+
+
+def candidate_source_amount_decimal(candidate) -> Decimal:
+    source_amount_decimal = getattr(candidate, "source_amount_decimal", None)
+    if source_amount_decimal is not None:
+        return source_amount_decimal
+    source_amount_minor = getattr(candidate, "source_amount_minor", None)
+    if source_amount_minor is not None:
+        return Decimal(source_amount_minor) / Decimal("100")
+    return Decimal(abs(candidate.amount_minor)) / Decimal("100")
+
+
+def minor_units_from_decimal(amount: Decimal) -> int:
+    return int((amount * Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def totals_table_rows(totals_minor: dict[str, int], label: str) -> list[dict]:
+    return [
+        {
+            label: key,
+            "importe": format_signed_amount_minor(amount_minor),
+        }
+        for key, amount_minor in totals_minor.items()
+    ]
+
+
 def category_table_rows(categories, *, show_advanced: bool = False) -> list[dict]:
     rows = []
     for category in categories:
@@ -676,10 +1160,10 @@ def apply_transaction_table_changes(
             transaction_id = int(row["id"])
             transaction = original_by_id[transaction_id]
             if row["eliminar"]:
-                service.soft_delete_transaction(
+                soft_delete_transaction_for_ui(
+                    service,
                     user_profile_id=user_profile_id,
                     transaction_id=transaction_id,
-                    decided_by="local_ui",
                 )
                 deleted_count += 1
                 continue
@@ -711,6 +1195,26 @@ def apply_transaction_table_changes(
             updated_count += 1
 
     return updated_count, deleted_count
+
+
+def soft_delete_transaction_for_ui(
+    service: AccountingService,
+    *,
+    user_profile_id: int,
+    transaction_id: int,
+) -> None:
+    if hasattr(service, "soft_delete_transaction"):
+        service.soft_delete_transaction(
+            user_profile_id=user_profile_id,
+            transaction_id=transaction_id,
+            decided_by="local_ui",
+        )
+        return
+
+    transaction = service.repository.session.get(Transaction, transaction_id)
+    if transaction is None or transaction.user_profile_id != user_profile_id:
+        raise ValueError("Transaction was not found for the user profile.")
+    transaction.is_deleted = True
 
 
 def edited_transaction_payload(
@@ -821,6 +1325,11 @@ def format_amount_minor(amount_minor: int) -> str:
     return f"{Decimal(amount_minor) / Decimal('100'):.2f}"
 
 
+def format_signed_amount_minor(amount_minor: int) -> str:
+    sign = "-" if amount_minor < 0 else ""
+    return f"{sign}{format_amount_minor(abs(amount_minor))}"
+
+
 def parse_amount_minor(value: str) -> int:
     normalized_value = value.replace(",", ".")
     try:
@@ -833,13 +1342,12 @@ def parse_amount_minor(value: str) -> int:
 
 
 def canonical_key_from_name(name: str) -> str:
-    return (
-        name.strip()
-        .lower()
-        .replace(" ", "_")
-        .replace("/", "_")
-        .replace("-", "_")
-    )
+    normalized = unicodedata.normalize("NFKD", name)
+    ascii_name = normalized.encode("ascii", "ignore").decode("ascii")
+    canonical_key = re.sub(r"[^a-zA-Z0-9]+", "_", ascii_name).strip("_").lower()
+    if not canonical_key:
+        raise ValueError("Category name must produce a canonical key.")
+    return canonical_key
 
 
 def flash_success(scope: str, message: str) -> None:

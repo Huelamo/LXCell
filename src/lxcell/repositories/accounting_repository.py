@@ -215,6 +215,26 @@ class AccountingRepository:
         self.session.add(import_batch)
         return import_batch
 
+    def get_completed_import_batch_by_file_hash(
+        self,
+        *,
+        user_profile_id: int,
+        source_system: ImportSourceSystem,
+        source_file_hash: str,
+    ) -> ImportBatch | None:
+        statement = select(ImportBatch).where(
+            ImportBatch.user_profile_id == user_profile_id,
+            ImportBatch.source_system == source_system,
+            ImportBatch.source_file_hash == source_file_hash,
+            ImportBatch.import_status.in_(
+                [
+                    ImportStatus.COMPLETED,
+                    ImportStatus.COMPLETED_WITH_WARNINGS,
+                ]
+            ),
+        )
+        return self.session.scalar(statement.order_by(ImportBatch.imported_at.desc()))
+
     def add_imported_transaction_source(
         self,
         *,
