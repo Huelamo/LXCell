@@ -2,9 +2,10 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from lxcell.db.models import Base
+from lxcell.db.models import Base, CategoryMapping, ImportBatch
 from lxcell.db.session import create_session_factory, create_sqlite_engine, session_scope
 from lxcell.enums.core_enums import (
     AccountType,
@@ -24,9 +25,13 @@ from lxcell.repositories import AccountingRepository
 from lxcell.services import AccountingService
 from lxcell.ui.streamlit_app import (
     HISTORICAL_EXCEL_PREVIEW_VERSION,
+    account_label_for_transaction_table,
+    apply_historical_category_mapping_to_plan,
     canonical_key_from_name,
+    category_label_for_transaction_table,
     category_table_rows,
     category_table_success_message,
+    confirm_historical_excel_import_from_preview,
     completed_historical_import_batch_fallback,
     edited_category_payload,
     edited_transaction_payload,
@@ -35,6 +40,7 @@ from lxcell.ui.streamlit_app import (
     friendly_integrity_error_message,
     historical_preview_can_render,
     historical_category_import_plan,
+    historical_category_mapping_suggestions,
     historical_import_validation_blockers,
     manual_transaction_payload,
     normalize_category_label_for_import,
@@ -209,6 +215,29 @@ def test_category_table_rows_show_deleted_status_in_advanced_view(session_factor
             "clave": "category_a",
         }
     ]
+
+
+def test_transaction_table_labels_show_inactive_records(session_factory):
+    with session_scope(session_factory) as session:
+        repository = AccountingRepository(session)
+        profile = repository.add_user_profile(display_name="Sample User")
+        session.flush()
+        account = repository.add_account(
+            user_profile_id=profile.id,
+            name="Historical account",
+            account_type=AccountType.OTHER,
+            is_active=False,
+        )
+        category = repository.add_category(
+            user_profile_id=profile.id,
+            name="Category A",
+            category_type=CategoryType.EXPENSE,
+            canonical_key="category_a",
+            is_active=False,
+        )
+
+    assert account_label_for_transaction_table(account) == "Historical account (eliminada)"
+    assert category_label_for_transaction_table(category) == "Category A (eliminada)"
 
 
 def test_update_category_for_ui_falls_back_for_loaded_legacy_service(session_factory):
@@ -628,6 +657,140 @@ def test_historical_category_import_plan_reuses_creates_and_flags_conflicts(
     ]
 
 
+def test_historical_category_import_plan_flags_inactive_name_match_as_conflict(
+    session_factory,
+):
+    with session_scope(session_factory) as session:
+        repository = AccountingRepository(session)
+        profile = repository.add_user_profile(display_name="Sample User")
+        session.flush()
+        inactive_category = repository.add_category(
+            user_profile_id=profile.id,
+            name="Category A",
+            category_type=CategoryType.EXPENSE,
+            canonical_key="category_a",
+            is_active=False,
+        )
+
+    preview = HistoricalExcelPreview(
+        source_file_name="sample.xlsx",
+        source_file_hash="abc123",
+        sheet_name="Registro",
+        header_row_number=2,
+        date_column_name="Fecha",
+        candidates=(
+            HistoricalExcelTransactionCandidate(
+                row_number_source=3,
+                column_name_source="Category A",
+                transaction_date=date(2026, 1, 10),
+                source_category_name="Category A",
+                amount_minor=100,
+                direction=Direction.OUTFLOW,
+                amount_raw="1",
+                description_raw=None,
+                payload_raw={},
+                source_column_kind="expense",
+            ),
+        ),
+        ignored_row_numbers=(),
+    )
+
+    rows = historical_category_import_plan([inactive_category], preview)
+
+    assert rows == [
+        {
+            "categoría Excel": "Category A",
+            "acción": "conflicto",
+            "categoría LXCell": "Category A (eliminada)",
+            "tipo": "expense",
+            "clave": "category_a",
+        }
+    ]
+
+
+def test_apply_historical_category_mapping_to_plan_marks_selected_existing_category(
+    session_factory,
+):
+    with session_scope(session_factory) as session:
+        repository = AccountingRepository(session)
+        profile = repository.add_user_profile(display_name="Sample User")
+        session.flush()
+        target_category = repository.add_category(
+            user_profile_id=profile.id,
+            name="Combined Category",
+            category_type=CategoryType.EXPENSE,
+            canonical_key="combined_category",
+        )
+
+    rows = apply_historical_category_mapping_to_plan(
+        [
+            {
+                "categoría Excel": "Legacy Category A",
+                "acción": "crear",
+                "categoría LXCell": "Legacy Category A",
+                "tipo": "expense",
+                "clave": "legacy_category_a",
+            },
+        ],
+        [target_category],
+        {"Legacy Category A": target_category.id},
+    )
+
+    assert rows == [
+        {
+            "categoría Excel": "Legacy Category A",
+            "acción": "mapear",
+            "categoría LXCell": "Combined Category",
+            "tipo": "expense",
+            "clave": "combined_category",
+        }
+    ]
+
+
+def test_historical_category_mapping_suggestions_use_prior_confirmed_mapping(
+    session_factory,
+):
+    with session_scope(session_factory) as session:
+        repository = AccountingRepository(session)
+        profile = repository.add_user_profile(display_name="Sample User")
+        session.flush()
+        target_category = repository.add_category(
+            user_profile_id=profile.id,
+            name="Combined Category",
+            category_type=CategoryType.EXPENSE,
+            canonical_key="combined_category",
+        )
+        session.flush()
+        session.add(
+            CategoryMapping(
+                user_profile_id=profile.id,
+                source_system=ImportSourceSystem.EXCEL_HISTORICAL,
+                source_file_hash="older_hash",
+                source_file_name="older.xlsx",
+                source_category_name="Legacy Category A",
+                source_category_key="legacy category a",
+                source_column_kind="expense",
+                target_category_id=target_category.id,
+            )
+        )
+
+    suggestions = historical_category_mapping_suggestions(
+        session_factory,
+        user_profile_id=profile.id,
+        category_plan=[
+            {
+                "categoría Excel": "Legacy Category A",
+                "acción": "crear",
+                "categoría LXCell": "Legacy Category A",
+                "tipo": "expense",
+                "clave": "legacy_category_a",
+            }
+        ],
+    )
+
+    assert suggestions == {"Legacy Category A": target_category.id}
+
+
 def test_historical_import_validation_blockers_require_clean_tracking_validation():
     invalid_preview = HistoricalExcelPreview(
         source_file_name="sample.xlsx",
@@ -680,6 +843,64 @@ def test_completed_historical_import_batch_fallback_finds_completed_hash(
         )
 
     assert found_batch.id == batch.id
+
+
+def test_confirm_historical_excel_import_from_preview_writes_import(session_factory):
+    with session_scope(session_factory) as session:
+        profile = AccountingRepository(session).add_user_profile(display_name="Sample User")
+        session.flush()
+
+    preview = HistoricalExcelPreview(
+        source_file_name="sample.xlsx",
+        source_file_hash="abc123",
+        sheet_name="Registro",
+        header_row_number=2,
+        date_column_name="Fecha",
+        candidates=(
+            HistoricalExcelTransactionCandidate(
+                row_number_source=3,
+                column_name_source="Category A",
+                transaction_date=date(2026, 1, 10),
+                source_category_name="Category A",
+                amount_minor=100,
+                direction=Direction.OUTFLOW,
+                amount_raw="1",
+                description_raw=None,
+                payload_raw={},
+                source_amount_minor=100,
+                source_amount_decimal=Decimal("1.00"),
+                source_column_kind="expense",
+            ),
+        ),
+        ignored_row_numbers=(),
+        tracking_validation=HistoricalExcelTrackingValidation(
+            sheet_name="Seguimiento",
+            comparisons=(
+                HistoricalExcelTrackingComparison(
+                    month_key="2026-01",
+                    source_category_name="Category A",
+                    registro_amount_minor=100,
+                    seguimiento_amount_minor=100,
+                ),
+            ),
+            registro_only_categories=(),
+            seguimiento_only_categories=(),
+        ),
+    )
+
+    result = confirm_historical_excel_import_from_preview(
+        session_factory,
+        user_profile_id=profile.id,
+        preview=preview,
+        confirmed_by="Sample User",
+        user_confirmed=True,
+    )
+
+    with session_scope(session_factory) as session:
+        import_batch = session.scalar(select(ImportBatch))
+
+    assert result.transaction_count == 1
+    assert import_batch.source_file_hash == "abc123"
 
 
 def test_normalize_category_label_for_import_is_accent_insensitive():

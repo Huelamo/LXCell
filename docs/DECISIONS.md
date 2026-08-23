@@ -273,3 +273,43 @@ Decision: add a read-only preparation step before confirmed historical Excel imp
 Reason: historical workbooks did not track the originating bank account per movement, so a technical account is more accurate than inventing provenance. Category creation from the workbook matches the expected migration path for users whose category set already lives in Excel. File-hash checks prevent accidental double import without blocking corrected workbooks whose contents have changed.
 
 Implication: the UI can now show whether an import is ready, which technical account will be used, which categories will be reused or created, and whether the file hash has already been imported. The actual database write remains deferred until the final confirmation workflow is implemented.
+
+## 2026-08-23 - Historical Excel Refund And Adjustment Semantics
+
+Decision: when historical Excel imports are confirmed into the database, expense columns with negative source amounts should become inflow transactions with `transaction_type = refund` and the original expense category. Income columns with negative source amounts are rare and should become adjustment transactions, not outflow income transactions.
+
+Reason: product returns and reimbursements reduce spending in the original expense category, while negative income represents a correction-like case that should not be mixed into ordinary income semantics.
+
+Implication: confirmed-import reporting and budget actuals should treat refunds as negative expense activity for the linked expense category.
+
+## 2026-08-23 - Phase 2 Confirmed Historical Excel Import
+
+Decision: implement confirmed historical Excel database import in `HistoricalExcelImportService`. The workflow writes from an already parsed `HistoricalExcelPreview`, requires clean `Seguimiento` validation and explicit user confirmation, creates or reuses the per-profile technical account `Excel histórico`, keeps `ImportBatch.account_id` null, reuses or creates categories from source category names, creates one transaction/source/accepted classification decision per candidate, blocks duplicate file hashes and normalized source-row overlaps, and exposes the action in the local Streamlit import tab only after preparation checks pass.
+
+Reason: the existing Phase 1 schema already supports a first auditable import without new tables. A dedicated service keeps the multi-entity workflow separate from manual entry and makes rollback behavior testable.
+
+Implication: historical Excel imports can now write confirmed transactions into the local database while preserving source-row traceability. Rollback marks the import batch as `rolled_back` and soft-deletes created transactions; it does not hard-delete audit rows or automatically deactivate categories. Persisted validation records, user-managed source category mappings, and replace/reimport workflows remain deferred.
+
+## 2026-08-23 - Per-Import Historical Category Mapping
+
+Decision: before confirmed historical Excel import, allow source categories that would otherwise be created or blocked by canonical-key conflict to be mapped to existing active LXCell categories of the same category type. The mapping choice is passed into `HistoricalExcelImportService` and is persisted as part of the confirmed file-scoped import mapping audit.
+
+Reason: older workbooks can contain categories that were later merged or removed from the canonical category model. Mapping them during import prevents obsolete categories from being recreated while preserving transaction-level traceability.
+
+Implication: multiple historical source categories can point to the same current LXCell category, and imported transactions will use that target category directly. Reusable mapping management beyond file-scoped import records remains deferred.
+
+## 2026-08-23 - File-Scoped Historical Category Mapping Records
+
+Decision: add persisted `category_mappings` for historical Excel imports, scoped by profile, source system, source file hash, and normalized source category key. Confirmed imports create mapping rows for every source category in the file, whether the category was reused, manually mapped, or newly created. The UI can suggest target categories from confirmed mappings in previous files with the same normalized source category key, but suggestions remain user-reviewed and are not applied silently.
+
+Reason: mappings need durable auditability at the file level because the same source category name may not mean exactly the same thing across different historical workbooks. Suggestions are still useful for repeated migrations, but they should assist rather than override the user's review.
+
+Implication: LXCell can now answer how each category in each imported workbook was interpreted. Multiple source categories can map to one target category. Automatic mapping application, mapping editing/superseding, and a dedicated mapping management screen remain deferred.
+
+## 2026-08-23 - Inactive Categories In Historical Imports And Transaction UI
+
+Decision: transaction tables should display inactive accounts and categories when historical transactions still reference them, labeling them as eliminated instead of showing blank category cells. Confirmed historical Excel imports should not silently reuse inactive categories by normalized name; inactive name matches should be treated as conflicts that require mapping to an active compatible category before import.
+
+Reason: inactive categories preserve historical links, but hiding them in the transaction table makes categorized transactions look uncategorized. Reusing inactive categories during new imports can also hide the fact that the user intentionally removed or merged that category.
+
+Implication: old transactions remain traceable to inactive categories, while future historical imports ask the user to resolve old category structures into the active category model.

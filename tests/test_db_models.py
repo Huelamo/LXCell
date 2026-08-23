@@ -45,6 +45,7 @@ def test_phase_1_models_configure_and_create_expected_tables(session_factory):
         "budget_lines",
         "budgets",
         "categories",
+        "category_mappings",
         "classification_decisions",
         "classification_rules",
         "import_batches",

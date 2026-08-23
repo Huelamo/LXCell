@@ -98,6 +98,12 @@ class ImportAction(StrEnum):
     FAILED_VALIDATION = "failed_validation"
 
 
+class CategoryMappingStatus(StrEnum):
+    CONFIRMED = "confirmed"
+    SUGGESTED = "suggested"
+    NEEDS_REVIEW = "needs_review"
+
+
 class ClassificationRuleType(StrEnum):
     DESCRIPTION_CONTAINS = "description_contains"
     DESCRIPTION_REGEX = "description_regex"
