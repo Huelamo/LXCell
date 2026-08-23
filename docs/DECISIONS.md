@@ -190,7 +190,7 @@ Decision: implement the initial Phase 1 SQLAlchemy ORM classes in `src/lxcell/db
 
 Reason: typed ORM classes keep the implementation close to the reviewed schema while avoiding a separate domain-object layer for now. Exact numeric confidence avoids floating point artifacts in audit records. A non-null `decided_by` makes classification history easier to read because system-generated decisions are explicit rather than represented by a missing actor.
 
-Implication: SQLite foreign keys must be enabled on connections so profile-isolation constraints are actually enforced in tests and local development. Phase 1 remains in progress; repositories, services, import behavior, and reporting behavior are still separate work.
+Implication: SQLite foreign keys must be enabled on connections so profile-isolation constraints are actually enforced in tests and local development. At the time of this decision, repositories, services, import behavior, and reporting behavior were still separate follow-up work.
 
 ## 2026-08-22 - Phase 1 Initial Repository Boundary
 
@@ -313,3 +313,11 @@ Decision: transaction tables should display inactive accounts and categories whe
 Reason: inactive categories preserve historical links, but hiding them in the transaction table makes categorized transactions look uncategorized. Reusing inactive categories during new imports can also hide the fact that the user intentionally removed or merged that category.
 
 Implication: old transactions remain traceable to inactive categories, while future historical imports ask the user to resolve old category structures into the active category model.
+
+## 2026-08-23 - Phase 1 Complete As Local Accounting Foundation
+
+Decision: mark Phase 1 as complete. LXCell now has a reviewed local SQLite and SQLAlchemy accounting foundation with user profiles, accounts, categories, transactions, import batches, imported source rows, classification rules and decisions, budgets, budget lines, file-scoped category mappings, repository/service boundaries, manual-entry workflows, soft deletion, cashflow reporting, category totals, budget actuals, a minimal CLI, a local Streamlit UI, and focused tests.
+
+Reason: the original Phase 1 goal was a Python core that can create, store, query, and summarize transactions independently of a GUI. That foundation is now implemented and tested. Remaining work such as richer import behavior, spreadsheet-equivalent reporting, classification automation, polished review screens, and rollover behavior belongs to later roadmap phases rather than blocking the core model.
+
+Implication: future work should treat Phase 1 as the stable local accounting foundation. Design changes to the core schema remain possible, but they should be driven by Phase 2+ requirements and documented as migrations or follow-up decisions, not as unfinished Phase 1 setup.
