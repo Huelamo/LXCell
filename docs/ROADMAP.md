@@ -1,10 +1,10 @@
 # LXCell Roadmap
 
-Last updated: 2026-08-13
+Last updated: 2026-08-23
 
 ## Phase 0 - Project Foundation
 
-Status: in progress
+Status: complete
 
 Goals:
 
@@ -14,7 +14,7 @@ Goals:
 
 ## Phase 1 - Core Accounting Model
 
-Status: in progress
+Status: complete
 
 Goals:
 
@@ -25,6 +25,16 @@ Goals:
 Expected result:
 
 - A Python domain layer that can create, store, query, and summarize transactions independently of any GUI.
+
+Completion note:
+
+- Phase 1 is complete as the local accounting foundation. SQLite and SQLAlchemy
+  are implemented, core entities are covered by tests, manual-entry workflows
+  preserve audit trails, and reporting can summarize cashflow, category totals,
+  and budget actuals without depending on the UI.
+- Rich import workflows, spreadsheet-equivalent reporting, classification
+  automation, final UI design, and multi-user product workflows continue in
+  later phases.
 
 ## Phase 2 - Historical Excel Import
 

@@ -1,12 +1,14 @@
 # Phase 1 Schema Review
 
-Last updated: 2026-08-22
+Last updated: 2026-08-23
 
 This document records the guided schema review for the Phase 1 LXCell accounting model. It is intentionally more detailed than `docs/DECISIONS.md`, which only keeps durable decision summaries.
 
 No real personal finance details should be added here. Use generic examples only.
 
 ## Review Status
+
+Phase 1 status: complete.
 
 Accepted blocks:
 
@@ -25,9 +27,26 @@ Accepted blocks:
 - Block 13: local CLI for manual entry.
 - Block 14: local Streamlit UI.
 
-Pending blocks:
+Moved out of Phase 1 scope:
 
-- Import behavior, editing workflows, richer review screens, monthly rollups, and rollover behavior.
+- Historical Excel import behavior belongs to Phase 2 and is tracked in
+  `docs/phase_2_historical_excel_import.md`.
+- Statement import behavior belongs to Phase 4.
+- Rich review queues and final UI product design belong to Phase 6.
+- Spreadsheet-equivalent monthly rollups and richer dashboards belong to Phase 3.
+- Rollover behavior beyond `none` remains deferred until budget reporting needs
+  it.
+- Classification rule execution and automation belong to Phase 5.
+
+Completion criteria met:
+
+- The normalized core accounting entities are implemented with SQLAlchemy ORM
+  models and SQLite.
+- Repository and service boundaries support local accounting workflows.
+- Manual transactions, category updates, transaction edits, soft deletion,
+  import traceability, classification decisions, budget lines, cashflow
+  summaries, category totals, and budget actuals are covered by focused tests.
+- CLI and Streamlit UI exist as local workflows on top of the core model.
 
 ## Block 1 - Cross-Table Schema Conventions
 
@@ -773,9 +792,12 @@ Accepted:
 
 Deferred:
 
-- Budget-vs-actual reporting.
 - Monthly rollups.
 - SQL-level aggregate optimization.
+
+Completed in later Phase 1 block:
+
+- Budget-vs-actual reporting is covered by Block 12.
 
 Rationale:
 
