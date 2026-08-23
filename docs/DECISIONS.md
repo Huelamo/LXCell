@@ -183,3 +183,93 @@ Decision: require Python 3.11+ and implement new Phase 1 enums with standard-lib
 Reason: `StrEnum` behaves like strings, which keeps DataFrame handling and serialization cleaner than `str, Enum` patterns that often require explicit `.value` access.
 
 Implication: CI should run on Python 3.11+. Keep `TransactionSourceType` and `ImportSourceSystem` separate because transaction origin and import source system are related but distinct concepts. `PaymentMethod` includes `peer_to_peer` for app-based person-to-person payments.
+
+## 2026-08-22 - Phase 1 ORM Implementation Details
+
+Decision: implement the initial Phase 1 SQLAlchemy ORM classes in `src/lxcell/db/models.py` using typed SQLAlchemy 2.x mappings, Python-side UTC timestamps, string-valued `StrEnum` persistence, and minimum database constraints. Store classification confidence as exact `Numeric(5, 4)` values from `0.0000` to `1.0000`. Require `ClassificationDecision.decided_by`, using `system` for non-human decisions.
+
+Reason: typed ORM classes keep the implementation close to the reviewed schema while avoiding a separate domain-object layer for now. Exact numeric confidence avoids floating point artifacts in audit records. A non-null `decided_by` makes classification history easier to read because system-generated decisions are explicit rather than represented by a missing actor.
+
+Implication: SQLite foreign keys must be enabled on connections so profile-isolation constraints are actually enforced in tests and local development. Phase 1 remains in progress; repositories, services, import behavior, and reporting behavior are still separate work.
+
+## 2026-08-22 - Phase 1 Initial Repository Boundary
+
+Decision: implement an initial `AccountingRepository` in `src/lxcell/repositories/accounting_repository.py` that receives an already-open SQLAlchemy `Session`, adds and queries the reviewed Phase 1 ORM entities, and leaves transaction commit/rollback ownership to `session_scope`.
+
+Reason: keeping transaction boundaries outside the repository makes persistence behavior easier to reason about and test. A single small repository is enough while the Phase 1 schema is still compact, and explicit method arguments avoid introducing DTO classes before there is enough pressure for another abstraction.
+
+Implication: repository reads that expose user-owned records should filter by `user_profile_id` where applicable. The repository should not contain classification automation, import workflows, reporting calculations, or destructive transaction deletion behavior; those remain later service-level design work.
+
+## 2026-08-22 - Phase 1 Initial Accounting Service
+
+Decision: implement an initial `AccountingService` for manual accounting workflows. Manual transactions entered by the user are stored as `user_confirmed`, including entries without a category. Both categorized and uncategorized manual entries create manual-entry import traceability through `ImportBatch` and `ImportedTransactionSource`.
+
+Reason: a user-entered transaction has already been intentionally reviewed enough to become part of the ledger. Missing category information should remain visible as uncategorized data, not as an automatic pending-review state.
+
+Implication: categorized manual entries create accepted `manual_user` classification decisions. Uncategorized manual entries are confirmed transactions without a classification decision until the user later assigns a category. Later manual classification confirmations supersede prior decisions and update the active transaction fields. Bank and historical imports can still enter as pending review in future import workflows.
+
+## 2026-08-22 - Phase 1 Minimum Reporting Service
+
+Decision: implement a minimal `ReportingService` in `src/lxcell/services/reporting_service.py` for date-range cashflow and category totals. Reports use `transaction_date`, filter by `user_profile_id`, exclude soft-deleted transactions, exclude ignored transactions, and exclude transfers by default.
+
+Reason: LXCell needs early accounting behavior that can be verified independently of UI, imports, and budget reports. Keeping the first reporting layer small makes direction handling, soft deletion, ignored records, and transfer exclusion explicit before adding budget-vs-actual calculations.
+
+Implication: cashflow summaries return positive inflow, outflow, and neutral buckets in minor units, with `net_minor = inflow_minor - outflow_minor`. Category totals use signed minor units so inflows are positive, outflows are negative, and neutral movements contribute zero. Budget reporting remains a later block.
+
+## 2026-08-22 - Phase 1 Budget Actual Reporting
+
+Decision: extend `ReportingService` with minimum budget-vs-actual summaries for active budgets and their budget lines. The report compares each planned budget-line amount to actual transaction activity for that same category in a date range, defaulting to the budget start and end dates.
+
+Reason: budget-vs-actual is one of the core spreadsheet replacement workflows, and it can now be tested safely on top of the ORM, repository, accounting service, and minimum reporting rules.
+
+Implication: budget actuals inherit the minimum reporting filters: scoped by `user_profile_id`, inclusive `transaction_date` range, excluded soft-deleted records, excluded ignored records, and transfers excluded by default. `actual_amount_minor` is positive in the meaning of the budget line: outflows count positively for expense-like categories, and inflows count positively for income categories. Activity in categories without budget lines is reported separately as unbudgeted actuals with planned amount `0`. Uncategorized activity is reported separately with amount and transaction count as a review signal. Monthly rollups, rollover behavior, and SQL aggregate optimization remain deferred.
+
+## 2026-08-22 - Phase 1 Local CLI For Manual Entry
+
+Decision: add a minimal local command line interface in `src/lxcell/cli.py` for initializing a SQLite database, creating profiles/accounts/categories, recording manual transactions, and listing transactions.
+
+Reason: manual data entry is now more valuable than additional reporting refinements because it lets LXCell start accumulating real local records through the reviewed ORM, repository, service, and audit-trail paths.
+
+Implication: the default local database path is `data/lxcell.db`, and `data/` remains ignored by git. The CLI uses `AccountingService` for manual transactions so manual entries keep the same confirmation, classification, and import-source audit behavior as the service layer. Bank/CSV/Excel importers remain separate future work.
+
+## 2026-08-22 - Phase 1 Local Streamlit UI
+
+Decision: add a minimal local Streamlit UI in `src/lxcell/ui/streamlit_app.py` for creating profiles, accounts, categories, recording manual transactions, viewing transactions, editing transactions, soft deleting transactions, viewing categories, editing categories, and removing categories from active use.
+
+Reason: a UI is more practical than the CLI for day-to-day manual entry. The backend now has enough reviewed behavior to expose a small local interface without inventing new financial logic in the presentation layer.
+
+Implication: the UI uses `data/lxcell.db` by default and routes writes through `AccountingService` and `AccountingRepository`. Successful writes show a visible confirmation after Streamlit reruns. If a manual transaction matches an existing registered transaction exactly by date, account, category, description, amount, currency, direction, transaction type, and payment method, the UI asks for explicit duplicate confirmation before writing another row. Transaction edits are made directly in the transactions table and then saved in batch. Classification-changing edits supersede previous classification decisions and create a new accepted manual decision when a category is assigned. Transaction delete actions are soft deletes through `transactions.is_deleted`, not hard deletes. Category edits are made directly in a categories table and can update name, type, display order, and active state. Category delete actions set `categories.is_active = false`, preserving historical transaction links; inactive categories disappear from the normal UI and remain visible only in the advanced category view. In the advanced category view, `estado` is read-only and `acción` is the editable user intent: active categories can be removed from active use, and inactive categories can be reactivated. `canonical_key` is generated automatically from the name on creation, preserved during normal renames, and shown/editable only in an advanced view. It remains a local Phase 1 interface, not the final product UI. Importers, richer review screens, and polished reporting remain later work.
+
+## 2026-08-22 - Phase 2 Historical Excel Dry-Run Preview
+
+Decision: begin historical Excel import with a read-only dry-run parser in `src/lxcell/importers/excel_historical.py`. The parser opens the `Registro` sheet with `openpyxl`, detects a date header row, treats numeric category columns as historical transaction candidates, computes source file hash metadata, and returns preview summaries without writing to the database. Source spreadsheet amounts are preserved separately from signed accounting impact. Expense columns treat positive source amounts as outflows and negative source amounts as inflows for refunds. Income columns treat positive source amounts as inflows and negative source amounts as outflows for reversals. Income columns are detected from green header fill first, then from generic income-like header names.
+
+Reason: historical workbooks are trusted source material and should not be mutated or imported blindly. A dry-run preview lets the user inspect source categories, parsed candidate transactions, monthly/category totals, and ignored rows before any `ImportBatch` or `Transaction` records are created.
+
+Implication: Phase 2 is now in progress. The first importer produces in-memory `HistoricalExcelPreview` and `HistoricalExcelTransactionCandidate` objects only. Category mapping, duplicate detection, confirmed DB import, budget import, validation against `Seguimiento`, and confirmed-import UI behavior remain separate follow-up blocks. Real personal finance workbooks must remain uncommitted; tests use anonymized synthetic workbooks.
+
+Detailed review log: `docs/phase_2_historical_excel_import.md`.
+
+## 2026-08-23 - Phase 2 Local Historical Excel Preview UI
+
+Decision: expose the historical Excel dry-run parser in the local Streamlit UI through an `Importar` tab. The UI accepts a `.xlsx` upload, reads a selected sheet name, writes only a temporary copy for parsing, displays preview metrics and candidate tables, and deletes the temporary copy after parsing.
+
+Reason: the user needs a visible workflow for checking whether historical workbooks are understood by LXCell before category mapping and database import are designed.
+
+Implication: the local import UI remains preview-only. It does not create import batches, transactions, category mappings, or validation rows. Confirmed database import, duplicate handling, source-category mapping, and persisted validation records remain later Phase 2 blocks.
+
+## 2026-08-23 - Phase 2 Seguimiento Aggregate Validation
+
+Decision: during historical Excel preview, read the `Seguimiento` sheet when present and compare its first monthly spending-by-category table against expense aggregates calculated from `Registro`. Income categories from `Registro` are intentionally excluded from this first-table validation because historical income summaries live in a later `Seguimiento` table that is deferred. The comparison uses source spreadsheet amounts, matches categories by normalized names, stops before annual totals and later analysis/budget tables, compares by month and source category, aggregates raw `Registro` amounts before rounding to minor units, and allows a one-cent tolerance.
+
+Reason: the historical workbooks are the trusted reference system. Comparing LXCell's parsed `Registro` aggregates against `Seguimiento` gives an early acceptance test for date parsing, category matching, amount signs, and aggregation behavior before any records are written.
+
+Implication: validation results are displayed in the local UI as matches and differences by month/category, plus unmatched expense categories at header level only. This remains dry-run only: no import batches, transactions, mappings, or validation rows are persisted yet. Workbooks with formulas must have cached values available for `openpyxl` `data_only=True` reads.
+
+## 2026-08-23 - Phase 2 Historical Import Preparation
+
+Decision: add a read-only preparation step before confirmed historical Excel import. Historical Excel rows are treated as mixed-account historical data and will use a technical per-profile account named `Excel histórico` when the write step is implemented. Category names from the workbook can seed the user's category set: existing categories are reused by normalized name, missing categories are planned for creation, and canonical-key collisions are shown as conflicts. Completed imports are detected by profile, `source_system = excel_historical`, and source file hash.
+
+Reason: historical workbooks did not track the originating bank account per movement, so a technical account is more accurate than inventing provenance. Category creation from the workbook matches the expected migration path for users whose category set already lives in Excel. File-hash checks prevent accidental double import without blocking corrected workbooks whose contents have changed.
+
+Implication: the UI can now show whether an import is ready, which technical account will be used, which categories will be reused or created, and whether the file hash has already been imported. The actual database write remains deferred until the final confirmation workflow is implemented.

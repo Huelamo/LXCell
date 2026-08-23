@@ -278,7 +278,8 @@ Rules:
 - `description_clean` is the normalized human-readable description.
 - `description_raw` preserves the source text.
 - Qualifiers such as `raw`, `clean`, and `source` should follow the main field concept in column names.
-- `category_id` can be null while a transaction is pending review.
+- `category_id` can be null while a transaction is pending review or when a
+  manual user-confirmed transaction has not been classified yet.
 - `description_clean` can be null during import, but must be present before a transaction is user-confirmed.
 - Any user correction should preserve the previous classification through `ClassificationDecision`.
 - Destructive deletion should be avoided; prefer `is_deleted` with audit metadata.
@@ -585,6 +586,7 @@ Rules:
 - Phase 1 classification rules should suggest classifications only. They should not automatically confirm transactions.
 - `auto_apply` should remain false in Phase 1. It is included as an explicit future extension point.
 - Merchant-based rules are deferred until merchant normalization is introduced.
+- `confidence` should be stored as an exact decimal value from `0.0000` to `1.0000`.
 
 ### ClassificationDecision
 
@@ -628,6 +630,8 @@ Rules:
 - Classification decisions can suggest or accept `category_id`, `transaction_type`, and `payment_method`.
 - User corrections should supersede prior decisions instead of deleting them.
 - AI suggestions should never be indistinguishable from user-confirmed records.
+- `confidence` should be stored as an exact decimal value from `0.0000` to `1.0000`.
+- `decided_by` is required. Use `system` for non-human decisions such as rules, import defaults, historical matches, and AI suggestions.
 
 ## Historical Excel Migration Entities
 

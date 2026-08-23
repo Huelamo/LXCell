@@ -28,7 +28,7 @@ Expected result:
 
 ## Phase 2 - Historical Excel Import
 
-Status: pending
+Status: in progress
 
 Goals:
 
