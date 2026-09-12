@@ -321,3 +321,21 @@ Decision: mark Phase 1 as complete. LXCell now has a reviewed local SQLite and S
 Reason: the original Phase 1 goal was a Python core that can create, store, query, and summarize transactions independently of a GUI. That foundation is now implemented and tested. Remaining work such as richer import behavior, spreadsheet-equivalent reporting, classification automation, polished review screens, and rollover behavior belongs to later roadmap phases rather than blocking the core model.
 
 Implication: future work should treat Phase 1 as the stable local accounting foundation. Design changes to the core schema remain possible, but they should be driven by Phase 2+ requirements and documented as migrations or follow-up decisions, not as unfinished Phase 1 setup.
+
+## 2026-09-12 - Phase 4 Statement Import Direction
+
+Decision: start Phase 4 with preview-first imports for user-provided bank and card statement files. Statement imports must require a user-selected active account, preserve file and row audit metadata through `ImportBatch` and `ImportedTransactionSource`, block repeated completed file imports by hash, detect row-level duplicates through normalized hashes, and write only after explicit user confirmation.
+
+Reason: statement files represent known account activity, unlike historical Excel workbooks that mixed account provenance. Requiring a selected account keeps reports, duplicate detection, and audit trails scoped correctly. A preview-first flow preserves the trust model established during historical Excel imports.
+
+Implication: `ImportBatch.account_id` is required for bank and card statement imports, even though it remains nullable for manual entries and historical Excel. The original statement file is not stored in the database or committed to the repository. The first implementation should use anonymized fixtures and can begin with one concrete export format before generalizing column mapping.
+
+Detailed review log: `docs/phase_4_statement_import.md`.
+
+## 2026-09-12 - Conservative Statement Classification
+
+Decision: the first statement import classifier should use deterministic, high-precision rules against existing active categories. Auto-assignment is allowed only when a rule or repeated user-confirmed history has high confidence, no competing category, compatible direction/type, and enough traceability to create an accepted `ClassificationDecision`. Lower-confidence results should be suggestions, and weak matches should leave the transaction uncategorized for review.
+
+Reason: the useful goal is to reduce repetitive manual categorization without silently polluting the ledger. Bank descriptions are not category definitions, so statement imports should not create categories from source text. Deterministic classification keeps behavior explainable before AI or merchant normalization are introduced.
+
+Implication: imported transactions may receive a category automatically while still keeping `review_status = pending_review` until the user reviews the transaction. Suggested classifications should be visible in the UI and recorded append-only. User corrections supersede previous decisions rather than deleting them. Merchant normalization, AI classification, transfer matching, and broader rule management remain later work.

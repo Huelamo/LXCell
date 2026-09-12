@@ -1,6 +1,6 @@
 # LXCell Roadmap
 
-Last updated: 2026-08-23
+Last updated: 2026-09-12
 
 ## Phase 0 - Project Foundation
 
@@ -69,7 +69,7 @@ Expected result:
 
 ## Phase 4 - Statement Import
 
-Status: pending
+Status: in progress
 
 Goals:
 
@@ -82,6 +82,17 @@ Goals:
 Expected result:
 
 - The user can import statements instead of typing transactions manually.
+
+Current design direction:
+
+- Start with preview-first imports for user-provided bank or card statement
+  exports, requiring the user to select an existing account.
+- Preserve file and row-level audit metadata without storing original files.
+- Combine file-hash and normalized row-hash duplicate detection.
+- Run conservative deterministic category suggestions against existing active
+  categories, leaving uncertain rows pending review.
+
+Detailed review log: `docs/phase_4_statement_import.md`.
 
 ## Phase 5 - Classification Rules
 
@@ -97,6 +108,12 @@ Goals:
 Expected result:
 
 - Most repetitive spending is categorized automatically, with review for ambiguous cases.
+
+Phase 4 dependency:
+
+- The first statement importer will include a small deterministic classification
+  layer so imported transactions can receive high-confidence category
+  suggestions. Broader rule learning, management, and automation remain Phase 5.
 
 ## Phase 6 - User Interface
 
