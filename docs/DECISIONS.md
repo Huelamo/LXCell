@@ -346,4 +346,12 @@ Decision: implement the first statement importer as a read-only PDF parser using
 
 Reason: the first real statement source available for design is a PDF export. Supporting it directly lets LXCell start reducing manual entry while preserving the preview-first safety model. Synthetic PDFs generated in tests allow parser behavior to be covered without committing sensitive statement files.
 
-Implication: `pdfplumber` is now a runtime dependency. Source systems include `bank_pdf` and `card_pdf` for future confirmed imports. The current parser does not write import batches or transactions, does not classify categories, and does not expose a UI yet; those remain the next Phase 4 slices.
+Implication: `pdfplumber` is now a runtime dependency. Source systems include `bank_pdf` and `card_pdf` for future confirmed imports. The parser does not write import batches or transactions and does not classify categories; those remain future Phase 4/5 slices.
+
+## 2026-09-12 - PDF Statement Preview UI
+
+Decision: expose the read-only PDF statement parser in the local Streamlit `Importar` tab. The preview requires an active account and a statement source type, stores the uploaded file only in a temporary parser file, shows aggregate parse results and the first candidate rows, and warns when a completed import batch already exists for the same profile, account, source system, and file hash.
+
+Reason: the user needs to inspect whether a statement PDF is understood before LXCell writes transactions or suggests categories. Account selection belongs in the preview because statement imports are account-specific and duplicate checks must not cross account boundaries.
+
+Implication: the UI still performs no confirmed statement import writes. Row-level duplicate checks, category suggestions, transaction creation, and review flows remain future Phase 4/5 slices.

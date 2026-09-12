@@ -34,6 +34,11 @@ Implemented:
   into in-memory candidates without database writes.
 - The parser reads repeated statement table headers, operation date, value date,
   description, outgoing amount, incoming amount, and balance.
+- The local Streamlit `Importar` tab can preview statement PDFs after the user
+  selects an active account and source type.
+- The preview shows parsed movement count, page count, parse issues, direction
+  totals, first candidate rows, and completed-import file-hash warnings scoped
+  to the selected account.
 - Tests generate synthetic anonymized PDFs at runtime; no real statement file is
   committed.
 
@@ -316,8 +321,10 @@ Recommended first slice:
 
 1. Add a source-specific parser for one anonymized PDF fixture. Done.
 2. Add a read-only preview service. Partially done at importer level.
-3. Expose preview in Streamlit.
+3. Expose preview in Streamlit. Done.
 4. Add duplicate checks against existing import batches and source rows.
+   File-hash checks are done at preview level; row-level source checks remain
+   deferred until confirmed imports create statement source rows.
 5. Defer confirmed write until preview behavior is trusted.
 
 This mirrors the historical Excel approach and keeps the first bank-statement

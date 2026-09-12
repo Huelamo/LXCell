@@ -91,9 +91,8 @@ Current design direction:
 - Combine file-hash and normalized row-hash duplicate detection.
 - Run conservative deterministic category suggestions against existing active
   categories, leaving uncertain rows pending review.
-- First read-only PDF parser implemented; Streamlit preview, account-scoped
-  duplicate checks, classification suggestions, and confirmed writes remain
-  follow-up work.
+- First read-only PDF parser and Streamlit preview implemented;
+  classification suggestions and confirmed writes remain follow-up work.
 
 Detailed review log: `docs/phase_4_statement_import.md`.
 

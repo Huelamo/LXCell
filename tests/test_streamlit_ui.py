@@ -20,11 +20,15 @@ from lxcell.importers import (
     HistoricalExcelTrackingComparison,
     HistoricalExcelTrackingValidation,
     HistoricalExcelTransactionCandidate,
+    PdfStatementParseIssue,
+    PdfStatementPreview,
+    PdfStatementTransactionCandidate,
 )
 from lxcell.repositories import AccountingRepository
 from lxcell.services import AccountingService
 from lxcell.ui.streamlit_app import (
     HISTORICAL_EXCEL_PREVIEW_VERSION,
+    STATEMENT_PDF_PREVIEW_VERSION,
     account_label_for_transaction_table,
     apply_historical_category_mapping_to_plan,
     canonical_key_from_name,
@@ -33,6 +37,7 @@ from lxcell.ui.streamlit_app import (
     category_table_success_message,
     confirm_historical_excel_import_from_preview,
     completed_historical_import_batch_fallback,
+    completed_statement_pdf_import_batch_fallback,
     edited_category_payload,
     edited_transaction_payload,
     find_duplicate_transactions,
@@ -46,9 +51,14 @@ from lxcell.ui.streamlit_app import (
     normalize_category_label_for_import,
     parse_amount_minor,
     preview_candidate_rows,
+    statement_pdf_candidate_rows,
+    statement_pdf_direction_rows,
+    statement_pdf_issue_rows,
+    statement_pdf_preview_can_render,
     source_totals_by_category_minor,
     source_totals_by_month_minor,
     stored_historical_preview_matches,
+    stored_statement_pdf_preview_matches,
     soft_delete_transaction_for_ui,
     totals_table_rows,
     tracking_comparison_rows,
@@ -505,6 +515,192 @@ def test_stored_historical_preview_matches_rejects_stale_preview():
 
 def test_historical_preview_can_render_rejects_legacy_object():
     assert not historical_preview_can_render(object())
+
+
+def test_statement_pdf_candidate_rows_use_preview_labels():
+    preview = PdfStatementPreview(
+        source_file_name="statement.pdf",
+        source_file_hash="abc123",
+        page_count=2,
+        candidates=(
+            PdfStatementTransactionCandidate(
+                row_number_source=1,
+                page_number=2,
+                transaction_date=date(2026, 9, 11),
+                posted_date=date(2026, 9, 12),
+                description_raw="Merchant A raw",
+                description_clean="Merchant A",
+                amount_minor=1234,
+                direction=Direction.OUTFLOW,
+                amount_raw="12,34",
+                currency="EUR",
+                balance_raw="987,66",
+                balance_minor=98766,
+                payload_raw={},
+                content_hash="abcdef1234567890",
+            ),
+        ),
+        issues=(),
+    )
+
+    assert statement_pdf_candidate_rows(preview) == [
+        {
+            "fila": 1,
+            "página": 2,
+            "fecha": date(2026, 9, 11),
+            "fecha valor": date(2026, 9, 12),
+            "descripción": "Merchant A",
+            "importe": "-12.34",
+            "dirección": Direction.OUTFLOW.value,
+            "saldo": "987.66",
+            "hash": "abcdef123456",
+        }
+    ]
+
+
+def test_statement_pdf_summary_rows_format_direction_and_issues():
+    preview = PdfStatementPreview(
+        source_file_name="statement.pdf",
+        source_file_hash="abc123",
+        page_count=1,
+        candidates=(
+            PdfStatementTransactionCandidate(
+                row_number_source=1,
+                page_number=1,
+                transaction_date=date(2026, 9, 11),
+                posted_date=None,
+                description_raw="Merchant A",
+                description_clean="Merchant A",
+                amount_minor=1000,
+                direction=Direction.OUTFLOW,
+                amount_raw="10,00",
+                currency="EUR",
+                balance_raw=None,
+                balance_minor=None,
+                payload_raw={},
+                content_hash="abc123",
+            ),
+            PdfStatementTransactionCandidate(
+                row_number_source=2,
+                page_number=1,
+                transaction_date=date(2026, 9, 12),
+                posted_date=None,
+                description_raw="Merchant B",
+                description_clean="Merchant B",
+                amount_minor=250,
+                direction=Direction.INFLOW,
+                amount_raw="2,50",
+                currency="EUR",
+                balance_raw=None,
+                balance_minor=None,
+                payload_raw={},
+                content_hash="def456",
+            ),
+        ),
+        issues=(
+            PdfStatementParseIssue(
+                page_number=1,
+                row_number_source=3,
+                message="Row has no outgoing or incoming amount.",
+            ),
+        ),
+    )
+
+    assert statement_pdf_direction_rows(preview) == [
+        {"dirección": "Entrante", "movimientos": 1, "importe": "2.50"},
+        {"dirección": "Saliente", "movimientos": 1, "importe": "-10.00"},
+    ]
+    assert statement_pdf_issue_rows(preview) == [
+        {
+            "página": 1,
+            "fila": 3,
+            "incidencia": "Row has no outgoing or incoming amount.",
+        }
+    ]
+
+
+def test_stored_statement_pdf_preview_matches_rejects_stale_preview():
+    upload_signature = ("statement.pdf", 7, ImportSourceSystem.BANK_PDF.value, "abc123")
+    preview = PdfStatementPreview(
+        source_file_name="statement.pdf",
+        source_file_hash="abc123",
+        page_count=1,
+        candidates=(),
+        issues=(),
+    )
+
+    assert not stored_statement_pdf_preview_matches(
+        {
+            "preview": object(),
+            "signature": upload_signature,
+        },
+        upload_signature,
+    )
+    assert stored_statement_pdf_preview_matches(
+        {
+            "preview": preview,
+            "signature": upload_signature,
+            "version": STATEMENT_PDF_PREVIEW_VERSION,
+        },
+        upload_signature,
+    )
+
+
+def test_statement_pdf_preview_can_render_rejects_legacy_object():
+    assert not statement_pdf_preview_can_render(object())
+
+
+def test_completed_statement_pdf_import_batch_fallback_is_account_scoped(
+    session_factory,
+):
+    with session_scope(session_factory) as session:
+        repository = AccountingRepository(session)
+        profile = repository.add_user_profile(display_name="Sample User")
+        session.flush()
+        account_a = repository.add_account(
+            user_profile_id=profile.id,
+            name="Account A",
+            account_type=AccountType.CHECKING,
+        )
+        account_b = repository.add_account(
+            user_profile_id=profile.id,
+            name="Account B",
+            account_type=AccountType.CHECKING,
+        )
+        session.flush()
+        matching_batch = repository.add_import_batch(
+            user_profile_id=profile.id,
+            account_id=account_a.id,
+            source_system=ImportSourceSystem.BANK_PDF,
+            source_file_hash="abc123",
+            import_status=ImportStatus.COMPLETED,
+        )
+        repository.add_import_batch(
+            user_profile_id=profile.id,
+            account_id=account_b.id,
+            source_system=ImportSourceSystem.BANK_PDF,
+            source_file_hash="abc123",
+            import_status=ImportStatus.COMPLETED,
+        )
+        session.flush()
+
+        found_batch = completed_statement_pdf_import_batch_fallback(
+            repository,
+            user_profile_id=profile.id,
+            account_id=account_a.id,
+            source_system=ImportSourceSystem.BANK_PDF,
+            source_file_hash="abc123",
+        )
+        missing_batch = completed_statement_pdf_import_batch_fallback(
+            repository,
+            user_profile_id=profile.id,
+            account_id=account_a.id,
+            source_system=ImportSourceSystem.CARD_PDF,
+            source_file_hash="abc123",
+        )
+
+    assert found_batch == matching_batch
+    assert missing_batch is None
 
 
 def test_totals_table_rows_format_signed_amounts():

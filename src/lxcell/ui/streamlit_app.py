@@ -29,7 +29,7 @@ from lxcell.enums.core_enums import (
     PaymentMethod,
     TransactionType,
 )
-from lxcell.importers import HistoricalExcelPreview
+from lxcell.importers import HistoricalExcelPreview, PdfStatementPreview
 from lxcell.repositories import AccountingRepository
 from lxcell.services import AccountingService
 from lxcell.services.historical_excel_import_service import HistoricalExcelImportService
@@ -38,6 +38,8 @@ PENDING_DUPLICATE_TRANSACTION_KEY = "lxcell_pending_duplicate_transaction"
 HISTORICAL_EXCEL_PREVIEW_KEY = "lxcell_historical_excel_preview"
 HISTORICAL_EXCEL_PREVIEW_VERSION = 5
 HISTORICAL_EXCEL_ACCOUNT_NAME = "Excel histórico"
+STATEMENT_PDF_PREVIEW_KEY = "lxcell_statement_pdf_preview"
+STATEMENT_PDF_PREVIEW_VERSION = 1
 
 
 def run() -> None:
@@ -473,6 +475,9 @@ def render_import_preview(session_factory, selected_profile_id: int | None) -> N
         st.info("Selecciona un perfil para previsualizar importaciones.")
         return
 
+    render_statement_pdf_preview(session_factory, selected_profile_id)
+    st.divider()
+
     st.subheader("Importar Excel histórico")
     render_flash_success("historical_import")
     uploaded_file = st.file_uploader("Archivo .xlsx", type=["xlsx"])
@@ -510,6 +515,214 @@ def render_import_preview(session_factory, selected_profile_id: int | None) -> N
     elif stored_preview is not None:
         st.session_state.pop(HISTORICAL_EXCEL_PREVIEW_KEY, None)
         st.info("La previsualización anterior ha caducado. Pulsa de nuevo Previsualizar Excel.")
+
+
+def render_statement_pdf_preview(session_factory, selected_profile_id: int) -> None:
+    st.subheader("Importar extracto PDF")
+
+    accounts, _ = load_accounting_lists(
+        session_factory,
+        selected_profile_id,
+        include_inactive=False,
+    )
+    if not accounts:
+        st.info("Añade una cuenta activa antes de previsualizar extractos.")
+        st.session_state.pop(STATEMENT_PDF_PREVIEW_KEY, None)
+        return
+
+    account_labels = {account.id: account.name for account in accounts}
+    account_id = st.selectbox(
+        "Cuenta del extracto",
+        options=[account.id for account in accounts],
+        format_func=account_labels.get,
+        key="statement_pdf_account_id",
+    )
+    source_system = st.selectbox(
+        "Tipo de extracto",
+        options=[ImportSourceSystem.BANK_PDF.value, ImportSourceSystem.CARD_PDF.value],
+        format_func={
+            ImportSourceSystem.BANK_PDF.value: "Cuenta bancaria PDF",
+            ImportSourceSystem.CARD_PDF.value: "Tarjeta PDF",
+        }.get,
+        key="statement_pdf_source_system",
+    )
+    uploaded_file = st.file_uploader(
+        "Archivo PDF",
+        type=["pdf"],
+        key="statement_pdf_file",
+    )
+
+    if uploaded_file is None:
+        st.session_state.pop(STATEMENT_PDF_PREVIEW_KEY, None)
+        return
+
+    upload_signature = uploaded_statement_pdf_signature(
+        uploaded_file,
+        account_id=account_id,
+        source_system=source_system,
+    )
+    if st.button("Previsualizar extracto", type="primary"):
+        try:
+            preview = preview_uploaded_statement_pdf(uploaded_file)
+        except ValueError as exc:
+            st.error(str(exc))
+            return
+        st.session_state[STATEMENT_PDF_PREVIEW_KEY] = {
+            "preview": preview,
+            "signature": upload_signature,
+            "version": STATEMENT_PDF_PREVIEW_VERSION,
+        }
+
+    stored_preview = st.session_state.get(STATEMENT_PDF_PREVIEW_KEY)
+    if stored_statement_pdf_preview_matches(stored_preview, upload_signature):
+        preview = stored_preview["preview"]
+        render_statement_pdf_preview_results(
+            session_factory,
+            user_profile_id=selected_profile_id,
+            account_id=account_id,
+            account_label=account_labels[account_id],
+            source_system=ImportSourceSystem(source_system),
+            preview=preview,
+        )
+    elif stored_preview is not None:
+        st.session_state.pop(STATEMENT_PDF_PREVIEW_KEY, None)
+        st.info(
+            "La previsualización anterior ha caducado. "
+            "Pulsa de nuevo Previsualizar extracto."
+        )
+
+
+def preview_uploaded_statement_pdf(uploaded_file):
+    with NamedTemporaryFile(delete=False, suffix=".pdf") as temporary_file:
+        temporary_path = Path(temporary_file.name)
+        temporary_file.write(uploaded_file.getbuffer())
+
+    try:
+        importer_module = importlib.import_module("lxcell.importers.pdf_statement")
+        importer_module = importlib.reload(importer_module)
+        return importer_module.PdfStatementDryRunImporter().preview(temporary_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def uploaded_statement_pdf_signature(
+    uploaded_file,
+    *,
+    account_id: int,
+    source_system: str,
+) -> tuple[str, int, str, str]:
+    digest = hashlib.sha256(uploaded_file.getbuffer()).hexdigest()
+    return uploaded_file.name, account_id, source_system, digest
+
+
+def stored_statement_pdf_preview_matches(
+    stored_preview,
+    upload_signature: tuple[str, int, str, str],
+) -> bool:
+    preview = stored_preview.get("preview") if isinstance(stored_preview, dict) else None
+    return (
+        isinstance(stored_preview, dict)
+        and stored_preview.get("version") == STATEMENT_PDF_PREVIEW_VERSION
+        and stored_preview.get("signature") == upload_signature
+        and statement_pdf_preview_can_render(preview)
+    )
+
+
+def statement_pdf_preview_can_render(preview) -> bool:
+    return (
+        preview is not None
+        and hasattr(preview, "candidates")
+        and hasattr(preview, "issues")
+        and hasattr(preview, "page_count")
+        and hasattr(preview, "source_file_hash")
+    )
+
+
+def render_statement_pdf_preview_results(
+    session_factory,
+    *,
+    user_profile_id: int,
+    account_id: int,
+    account_label: str,
+    source_system: ImportSourceSystem,
+    preview: PdfStatementPreview,
+) -> None:
+    st.success("Extracto leído en modo previsualización. No se ha guardado nada.")
+
+    duplicate_batch = completed_statement_pdf_import_batch(
+        session_factory,
+        user_profile_id=user_profile_id,
+        account_id=account_id,
+        source_system=source_system,
+        source_file_hash=preview.source_file_hash,
+    )
+    if duplicate_batch is not None:
+        st.warning("Este archivo ya fue importado correctamente para esta cuenta.")
+
+    candidate_column, page_column, issue_column = st.columns(3)
+    candidate_column.metric("Movimientos", preview.transaction_count)
+    page_column.metric("Páginas", preview.page_count)
+    issue_column.metric("Incidencias", len(preview.issues))
+
+    st.caption(
+        f"Cuenta: {account_label} · "
+        f"tipo: {source_system.value} · "
+        f"hash: {preview.source_file_hash[:12]}"
+    )
+
+    direction_rows = statement_pdf_direction_rows(preview)
+    if direction_rows:
+        st.subheader("Resumen por dirección")
+        st.dataframe(pd.DataFrame(direction_rows), use_container_width=True)
+
+    issue_rows = statement_pdf_issue_rows(preview)
+    if issue_rows:
+        st.subheader("Incidencias de lectura")
+        st.dataframe(pd.DataFrame(issue_rows), use_container_width=True)
+
+    candidate_rows = statement_pdf_candidate_rows(preview, limit=100)
+    if candidate_rows:
+        st.subheader("Primeros movimientos")
+        st.dataframe(pd.DataFrame(candidate_rows), use_container_width=True)
+
+
+def completed_statement_pdf_import_batch(
+    session_factory,
+    *,
+    user_profile_id: int,
+    account_id: int,
+    source_system: ImportSourceSystem,
+    source_file_hash: str,
+):
+    with session_scope(session_factory) as session:
+        repository = AccountingRepository(session)
+        return completed_statement_pdf_import_batch_fallback(
+            repository,
+            user_profile_id=user_profile_id,
+            account_id=account_id,
+            source_system=source_system,
+            source_file_hash=source_file_hash,
+        )
+
+
+def completed_statement_pdf_import_batch_fallback(
+    repository: AccountingRepository,
+    *,
+    user_profile_id: int,
+    account_id: int,
+    source_system: ImportSourceSystem,
+    source_file_hash: str,
+):
+    statement = select(ImportBatch).where(
+        ImportBatch.user_profile_id == user_profile_id,
+        ImportBatch.account_id == account_id,
+        ImportBatch.source_system == source_system,
+        ImportBatch.source_file_hash == source_file_hash,
+        ImportBatch.import_status.in_(
+            [ImportStatus.COMPLETED, ImportStatus.COMPLETED_WITH_WARNINGS]
+        ),
+    )
+    return repository.session.scalar(statement.order_by(ImportBatch.imported_at.desc()))
 
 
 def preview_uploaded_historical_excel(uploaded_file, *, sheet_name: str):
@@ -1072,6 +1285,80 @@ def preview_candidate_rows(
         }
         for candidate in preview.candidates[:limit]
     ]
+
+
+def statement_pdf_candidate_rows(
+    preview: PdfStatementPreview,
+    *,
+    limit: int = 100,
+) -> list[dict]:
+    return [
+        {
+            "fila": candidate.row_number_source,
+            "página": candidate.page_number,
+            "fecha": candidate.transaction_date,
+            "fecha valor": candidate.posted_date,
+            "descripción": candidate.description_clean,
+            "importe": format_signed_amount_minor(
+                statement_pdf_signed_amount_minor(candidate)
+            ),
+            "dirección": candidate.direction.value,
+            "saldo": (
+                format_signed_amount_minor(candidate.balance_minor)
+                if candidate.balance_minor is not None
+                else ""
+            ),
+            "hash": candidate.content_hash[:12],
+        }
+        for candidate in preview.candidates[:limit]
+    ]
+
+
+def statement_pdf_issue_rows(preview: PdfStatementPreview) -> list[dict]:
+    return [
+        {
+            "página": issue.page_number,
+            "fila": issue.row_number_source or "",
+            "incidencia": issue.message,
+        }
+        for issue in preview.issues
+    ]
+
+
+def statement_pdf_direction_rows(preview: PdfStatementPreview) -> list[dict]:
+    totals: dict[Direction, dict[str, int]] = {}
+    for candidate in preview.candidates:
+        current = totals.setdefault(
+            candidate.direction,
+            {"movimientos": 0, "importe_minor": 0},
+        )
+        current["movimientos"] += 1
+        current["importe_minor"] += statement_pdf_signed_amount_minor(candidate)
+
+    labels = {
+        Direction.INFLOW: "Entrante",
+        Direction.OUTFLOW: "Saliente",
+        Direction.NEUTRAL: "Neutral",
+    }
+    return [
+        {
+            "dirección": labels[direction],
+            "movimientos": values["movimientos"],
+            "importe": format_signed_amount_minor(values["importe_minor"]),
+        }
+        for direction, values in sorted(
+            totals.items(),
+            key=lambda item: item[0].value,
+        )
+    ]
+
+
+def statement_pdf_signed_amount_minor(candidate) -> int:
+    if candidate.direction == Direction.INFLOW:
+        return candidate.amount_minor
+    if candidate.direction == Direction.OUTFLOW:
+        return -candidate.amount_minor
+    return 0
 
 
 def source_totals_by_month_minor(preview: HistoricalExcelPreview) -> dict[str, int]:
