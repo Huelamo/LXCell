@@ -355,3 +355,11 @@ Decision: expose the read-only PDF statement parser in the local Streamlit `Impo
 Reason: the user needs to inspect whether a statement PDF is understood before LXCell writes transactions or suggests categories. Account selection belongs in the preview because statement imports are account-specific and duplicate checks must not cross account boundaries.
 
 Implication: the UI still performs no confirmed statement import writes. Row-level duplicate checks, category suggestions, transaction creation, and review flows remain future Phase 4/5 slices.
+
+## 2026-09-12 - Profile Historical Transaction Lock
+
+Decision: add an optional `transactions_locked_until` date to each user profile. Transactions dated on or before that date are considered protected and require an explicit override before they can be created, edited, soft-deleted, classified, or imported.
+
+Reason: historical Excel imports may already represent the user's reviewed manual history. When later statement imports overlap that period, LXCell should not silently duplicate or rewrite settled history.
+
+Implication: manual entry, transaction table edits, classification confirmations, soft deletes, and confirmed historical Excel imports must enforce the profile lock. The local UI exposes the lock in configuration and asks for an additional confirmation when a requested write touches the protected period. Statement PDF preview remains read-only, but marks protected candidate rows so the confirmed statement import workflow can later skip or require explicit override for overlapping history.

@@ -332,6 +332,136 @@ def test_soft_delete_transaction_hides_it_from_default_lists(session_factory):
     assert all_transactions[0].is_deleted is True
 
 
+def test_locked_profile_rejects_manual_transaction_without_override(session_factory):
+    with session_scope(session_factory) as session:
+        service = AccountingService(AccountingRepository(session))
+        user_profile, account, category = _create_profile_account_category(service)
+        service.update_user_profile_transaction_lock(
+            user_profile_id=user_profile.id,
+            transactions_locked_until=date(2026, 1, 31),
+        )
+
+        with pytest.raises(ValueError, match="periodo protegido"):
+            service.record_manual_transaction(
+                user_profile_id=user_profile.id,
+                account_id=account.id,
+                category_id=category.id,
+                transaction_date=date(2026, 1, 10),
+                description_clean="Merchant A",
+                amount_minor=1234,
+                direction=Direction.OUTFLOW,
+                transaction_type=TransactionType.EXPENSE,
+                decided_by="Sample User",
+            )
+
+
+def test_locked_profile_allows_manual_transaction_with_override(session_factory):
+    with session_scope(session_factory) as session:
+        service = AccountingService(AccountingRepository(session))
+        user_profile, account, category = _create_profile_account_category(service)
+        service.update_user_profile_transaction_lock(
+            user_profile_id=user_profile.id,
+            transactions_locked_until=date(2026, 1, 31),
+        )
+
+        transaction = service.record_manual_transaction(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            category_id=category.id,
+            transaction_date=date(2026, 1, 10),
+            description_clean="Merchant A",
+            amount_minor=1234,
+            direction=Direction.OUTFLOW,
+            transaction_type=TransactionType.EXPENSE,
+            decided_by="Sample User",
+            allow_locked_period_override=True,
+        )
+
+    assert transaction.transaction_date == date(2026, 1, 10)
+
+
+def test_locked_profile_rejects_edit_and_delete_without_override(session_factory):
+    with session_scope(session_factory) as session:
+        service = AccountingService(AccountingRepository(session))
+        user_profile, account, category = _create_profile_account_category(service)
+        transaction = service.record_manual_transaction(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            category_id=category.id,
+            transaction_date=date(2026, 1, 10),
+            description_clean="Merchant A",
+            amount_minor=1234,
+            direction=Direction.OUTFLOW,
+            transaction_type=TransactionType.EXPENSE,
+            decided_by="Sample User",
+        )
+        service.update_user_profile_transaction_lock(
+            user_profile_id=user_profile.id,
+            transactions_locked_until=date(2026, 1, 31),
+        )
+        session.flush()
+
+        with pytest.raises(ValueError, match="periodo protegido"):
+            service.update_manual_transaction(
+                user_profile_id=user_profile.id,
+                transaction_id=transaction.id,
+                account_id=account.id,
+                category_id=category.id,
+                transaction_date=date(2026, 1, 11),
+                description_clean="Merchant B",
+                amount_minor=2000,
+                direction=Direction.OUTFLOW,
+                transaction_type=TransactionType.EXPENSE,
+                decided_by="Sample User",
+            )
+
+        with pytest.raises(ValueError, match="periodo protegido"):
+            service.soft_delete_transaction(
+                user_profile_id=user_profile.id,
+                transaction_id=transaction.id,
+                decided_by="Sample User",
+            )
+
+
+def test_locked_profile_rejects_classification_confirmation_without_override(
+    session_factory,
+):
+    with session_scope(session_factory) as session:
+        service = AccountingService(AccountingRepository(session))
+        user_profile, account, category = _create_profile_account_category(service)
+        second_category = service.create_category(
+            user_profile_id=user_profile.id,
+            name="Category B",
+            category_type=CategoryType.EXPENSE,
+            canonical_key="category_b",
+        )
+        transaction = service.record_manual_transaction(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            category_id=category.id,
+            transaction_date=date(2026, 1, 10),
+            description_clean="Merchant A",
+            amount_minor=1234,
+            direction=Direction.OUTFLOW,
+            transaction_type=TransactionType.EXPENSE,
+            decided_by="Sample User",
+        )
+        service.update_user_profile_transaction_lock(
+            user_profile_id=user_profile.id,
+            transactions_locked_until=date(2026, 1, 31),
+        )
+        session.flush()
+
+        with pytest.raises(ValueError, match="periodo protegido"):
+            service.confirm_transaction_classification(
+                user_profile_id=user_profile.id,
+                transaction_id=transaction.id,
+                category_id=second_category.id,
+                transaction_type=TransactionType.EXPENSE,
+                decided_by="Sample User",
+            )
+
+
 def test_service_rejects_manual_transaction_without_description(session_factory):
     with session_scope(session_factory) as session:
         service = AccountingService(AccountingRepository(session))

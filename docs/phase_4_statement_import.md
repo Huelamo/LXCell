@@ -39,6 +39,8 @@ Implemented:
 - The preview shows parsed movement count, page count, parse issues, direction
   totals, first candidate rows, and completed-import file-hash warnings scoped
   to the selected account.
+- The preview marks rows dated inside the profile's protected historical period
+  when `transactions_locked_until` is configured.
 - Tests generate synthetic anonymized PDFs at runtime; no real statement file is
   committed.
 
@@ -134,7 +136,9 @@ The first workflow should follow this shape:
 5. LXCell checks each candidate normalized hash against prior imported sources
    for the same profile and account.
 6. LXCell runs deterministic classification suggestions.
-7. UI shows preview metrics, blocking errors, duplicate candidates, category
+7. LXCell marks candidates dated on or before the selected profile's
+   `transactions_locked_until` date as protected.
+8. UI shows preview metrics, blocking errors, duplicate candidates, category
    suggestions, and rows that will remain uncategorized.
 
 Preview should be repeatable. Re-previewing the same file should not create
@@ -154,6 +158,9 @@ Rules:
 - Exact duplicate source rows should not create new transactions by default.
 - Rows ignored as exact duplicates should still be traceable through
   `ImportedTransactionSource.import_action`.
+- Rows dated inside the selected profile's protected historical period should
+  not be created by default. A confirmed workflow must either skip those rows
+  with traceability or ask for explicit additional approval before writing them.
 - Non-duplicate rows create `Transaction` records.
 - Confirmed import can use `completed_with_warnings` when rows were skipped as
   duplicates or left uncategorized.

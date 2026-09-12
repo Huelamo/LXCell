@@ -91,8 +91,11 @@ Current design direction:
 - Combine file-hash and normalized row-hash duplicate detection.
 - Run conservative deterministic category suggestions against existing active
   categories, leaving uncertain rows pending review.
+- Respect each profile's historical transaction lock so statement imports that
+  overlap already reviewed history are not written silently.
 - First read-only PDF parser and Streamlit preview implemented;
-  classification suggestions and confirmed writes remain follow-up work.
+  protected-period markers are shown in preview, and classification suggestions
+  plus confirmed writes remain follow-up work.
 
 Detailed review log: `docs/phase_4_statement_import.md`.
 

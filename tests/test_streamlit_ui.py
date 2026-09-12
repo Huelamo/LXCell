@@ -55,6 +55,7 @@ from lxcell.ui.streamlit_app import (
     statement_pdf_direction_rows,
     statement_pdf_issue_rows,
     statement_pdf_preview_can_render,
+    statement_pdf_protected_candidate_count,
     source_totals_by_category_minor,
     source_totals_by_month_minor,
     stored_historical_preview_matches,
@@ -63,6 +64,7 @@ from lxcell.ui.streamlit_app import (
     totals_table_rows,
     tracking_comparison_rows,
     tracking_unmatched_category_rows,
+    transaction_table_has_locked_period_changes,
     update_category_for_ui,
 )
 
@@ -552,10 +554,19 @@ def test_statement_pdf_candidate_rows_use_preview_labels():
             "descripción": "Merchant A",
             "importe": "-12.34",
             "dirección": Direction.OUTFLOW.value,
+            "periodo": "abierto",
             "saldo": "987.66",
             "hash": "abcdef123456",
         }
     ]
+    assert statement_pdf_candidate_rows(
+        preview,
+        locked_until=date(2026, 9, 30),
+    )[0]["periodo"] == "protegido"
+    assert statement_pdf_protected_candidate_count(
+        preview,
+        locked_until=date(2026, 9, 30),
+    ) == 1
 
 
 def test_statement_pdf_summary_rows_format_direction_and_issues():
@@ -648,6 +659,59 @@ def test_stored_statement_pdf_preview_matches_rejects_stale_preview():
 
 def test_statement_pdf_preview_can_render_rejects_legacy_object():
     assert not statement_pdf_preview_can_render(object())
+
+
+def test_transaction_table_has_locked_period_changes_detects_protected_edits(
+    session_factory,
+):
+    with session_scope(session_factory) as session:
+        service = AccountingService(AccountingRepository(session))
+        profile = service.create_user_profile(display_name="Sample User")
+        session.flush()
+        account = service.create_account(
+            user_profile_id=profile.id,
+            name="Primary account",
+            account_type=AccountType.CHECKING,
+        )
+        service.update_user_profile_transaction_lock(
+            user_profile_id=profile.id,
+            transactions_locked_until=date(2026, 1, 31),
+        )
+        session.flush()
+        transaction = service.record_manual_transaction(
+            user_profile_id=profile.id,
+            account_id=account.id,
+            transaction_date=date(2026, 2, 1),
+            description_clean="Merchant A",
+            amount_minor=1234,
+            direction=Direction.OUTFLOW,
+            transaction_type=TransactionType.EXPENSE,
+            decided_by="Sample User",
+        )
+        session.flush()
+
+    assert transaction_table_has_locked_period_changes(
+        session_factory,
+        user_profile_id=profile.id,
+        original_transactions=[transaction],
+        edited_rows=[
+            {
+                "id": transaction.id,
+                "fecha": date(2026, 1, 30),
+                "cuenta": "Primary account",
+                "categoria": "Sin categoría",
+                "descripcion": "Merchant A",
+                "importe": "12.34",
+                "direccion": Direction.OUTFLOW.value,
+                "tipo": TransactionType.EXPENSE.value,
+                "metodo_pago": "",
+                "estado": "user_confirmed",
+                "eliminar": False,
+            }
+        ],
+        account_ids_by_label={"Primary account": account.id},
+        category_ids_by_label={"Sin categoría": None},
+    )
 
 
 def test_completed_statement_pdf_import_batch_fallback_is_account_scoped(
