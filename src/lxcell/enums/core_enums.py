@@ -76,7 +76,9 @@ class TransactionSourceType(StrEnum):
 class ImportSourceSystem(StrEnum):
     MANUAL_ENTRY = "manual_entry"
     BANK_CSV = "bank_csv"
+    BANK_PDF = "bank_pdf"
     CARD_CSV = "card_csv"
+    CARD_PDF = "card_pdf"
     EXCEL_HISTORICAL = "excel_historical"
     API = "api"
     OTHER = "other"

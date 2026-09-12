@@ -29,15 +29,18 @@ from lxcell.enums.core_enums import (
     PaymentMethod,
     TransactionType,
 )
-from lxcell.importers import HistoricalExcelPreview
+from lxcell.importers import HistoricalExcelPreview, PdfStatementPreview
 from lxcell.repositories import AccountingRepository
 from lxcell.services import AccountingService
+from lxcell.services.accounting_service import protected_transaction_dates
 from lxcell.services.historical_excel_import_service import HistoricalExcelImportService
 
 PENDING_DUPLICATE_TRANSACTION_KEY = "lxcell_pending_duplicate_transaction"
 HISTORICAL_EXCEL_PREVIEW_KEY = "lxcell_historical_excel_preview"
 HISTORICAL_EXCEL_PREVIEW_VERSION = 5
 HISTORICAL_EXCEL_ACCOUNT_NAME = "Excel histórico"
+STATEMENT_PDF_PREVIEW_KEY = "lxcell_statement_pdf_preview"
+STATEMENT_PDF_PREVIEW_VERSION = 1
 
 
 def run() -> None:
@@ -95,6 +98,30 @@ def render_setup(session_factory, selected_profile_id: int | None) -> None:
     if selected_profile_id is None:
         st.info("Crea o selecciona un perfil para añadir cuentas y categorías.")
         return
+
+    profile = load_user_profile(session_factory, selected_profile_id)
+    if profile is not None:
+        st.subheader("Protección histórica")
+        current_lock = profile.transactions_locked_until
+        lock_enabled = st.checkbox(
+            "Proteger transacciones antiguas",
+            value=current_lock is not None,
+            key="transactions_locked_until_enabled",
+        )
+        lock_date = st.date_input(
+            "Bloquear hasta",
+            value=current_lock or date.today(),
+            disabled=not lock_enabled,
+            key="transactions_locked_until",
+        )
+        if st.button("Guardar protección histórica"):
+            update_profile_transaction_lock_from_ui(
+                session_factory,
+                user_profile_id=selected_profile_id,
+                transactions_locked_until=lock_date if lock_enabled else None,
+            )
+            flash_success("setup", "Protección histórica guardada.")
+            st.rerun()
 
     account_column, category_column = st.columns(2)
     with account_column:
@@ -206,6 +233,12 @@ def render_transaction_form(session_factory, selected_profile_id: int | None) ->
             "Método de pago", [""] + enum_values(PaymentMethod)
         )
         decided_by = st.text_input("Registrado por", value="local_ui")
+        locked_period_override = render_locked_period_override_for_dates(
+            session_factory,
+            user_profile_id=selected_profile_id,
+            transaction_dates=[transaction_date],
+            key="manual_transaction_locked_period_override",
+        )
 
         submitted = st.form_submit_button("Registrar transacción")
         if submitted:
@@ -221,6 +254,7 @@ def render_transaction_form(session_factory, selected_profile_id: int | None) ->
                     transaction_type=transaction_type,
                     payment_method=payment_method,
                     decided_by=decided_by,
+                    allow_locked_period_override=locked_period_override,
                 )
                 duplicates = find_duplicate_transactions(
                     session_factory,
@@ -341,10 +375,36 @@ def render_transactions(session_factory, selected_profile_id: int | None) -> Non
         confirm_delete = st.checkbox(
             "Confirmo que quiero eliminar las transacciones marcadas del libro activo"
         )
+    locked_period_override = False
+    if transaction_table_has_locked_period_changes(
+        session_factory,
+        user_profile_id=selected_profile_id,
+        original_transactions=recent_transactions,
+        edited_rows=edited_rows,
+        account_ids_by_label=account_ids_by_label,
+        category_ids_by_label=category_ids_by_label,
+    ):
+        locked_period_override = st.checkbox(
+            "Confirmo que quiero modificar transacciones en un periodo protegido",
+            key="transaction_table_locked_period_override",
+        )
 
     if st.button("Guardar cambios", type="primary"):
         if marked_for_deletion and not confirm_delete:
             st.warning("Marca la confirmación antes de eliminar transacciones.")
+            return
+        if (
+            transaction_table_has_locked_period_changes(
+                session_factory,
+                user_profile_id=selected_profile_id,
+                original_transactions=recent_transactions,
+                edited_rows=edited_rows,
+                account_ids_by_label=account_ids_by_label,
+                category_ids_by_label=category_ids_by_label,
+            )
+            and not locked_period_override
+        ):
+            st.warning("Confirma el permiso adicional para modificar el periodo protegido.")
             return
         try:
             updated_count, deleted_count = apply_transaction_table_changes(
@@ -354,6 +414,7 @@ def render_transactions(session_factory, selected_profile_id: int | None) -> Non
                 edited_rows=edited_rows,
                 account_ids_by_label=account_ids_by_label,
                 category_ids_by_label=category_ids_by_label,
+                allow_locked_period_override=locked_period_override,
             )
         except ValueError as exc:
             st.error(str(exc))
@@ -473,6 +534,9 @@ def render_import_preview(session_factory, selected_profile_id: int | None) -> N
         st.info("Selecciona un perfil para previsualizar importaciones.")
         return
 
+    render_statement_pdf_preview(session_factory, selected_profile_id)
+    st.divider()
+
     st.subheader("Importar Excel histórico")
     render_flash_success("historical_import")
     uploaded_file = st.file_uploader("Archivo .xlsx", type=["xlsx"])
@@ -510,6 +574,232 @@ def render_import_preview(session_factory, selected_profile_id: int | None) -> N
     elif stored_preview is not None:
         st.session_state.pop(HISTORICAL_EXCEL_PREVIEW_KEY, None)
         st.info("La previsualización anterior ha caducado. Pulsa de nuevo Previsualizar Excel.")
+
+
+def render_statement_pdf_preview(session_factory, selected_profile_id: int) -> None:
+    st.subheader("Importar extracto PDF")
+
+    accounts, _ = load_accounting_lists(
+        session_factory,
+        selected_profile_id,
+        include_inactive=False,
+    )
+    if not accounts:
+        st.info("Añade una cuenta activa antes de previsualizar extractos.")
+        st.session_state.pop(STATEMENT_PDF_PREVIEW_KEY, None)
+        return
+
+    account_labels = {account.id: account.name for account in accounts}
+    account_id = st.selectbox(
+        "Cuenta del extracto",
+        options=[account.id for account in accounts],
+        format_func=account_labels.get,
+        key="statement_pdf_account_id",
+    )
+    source_system = st.selectbox(
+        "Tipo de extracto",
+        options=[ImportSourceSystem.BANK_PDF.value, ImportSourceSystem.CARD_PDF.value],
+        format_func={
+            ImportSourceSystem.BANK_PDF.value: "Cuenta bancaria PDF",
+            ImportSourceSystem.CARD_PDF.value: "Tarjeta PDF",
+        }.get,
+        key="statement_pdf_source_system",
+    )
+    uploaded_file = st.file_uploader(
+        "Archivo PDF",
+        type=["pdf"],
+        key="statement_pdf_file",
+    )
+
+    if uploaded_file is None:
+        st.session_state.pop(STATEMENT_PDF_PREVIEW_KEY, None)
+        return
+
+    upload_signature = uploaded_statement_pdf_signature(
+        uploaded_file,
+        account_id=account_id,
+        source_system=source_system,
+    )
+    if st.button("Previsualizar extracto", type="primary"):
+        try:
+            preview = preview_uploaded_statement_pdf(uploaded_file)
+        except ValueError as exc:
+            st.error(str(exc))
+            return
+        st.session_state[STATEMENT_PDF_PREVIEW_KEY] = {
+            "preview": preview,
+            "signature": upload_signature,
+            "version": STATEMENT_PDF_PREVIEW_VERSION,
+        }
+
+    stored_preview = st.session_state.get(STATEMENT_PDF_PREVIEW_KEY)
+    if stored_statement_pdf_preview_matches(stored_preview, upload_signature):
+        preview = stored_preview["preview"]
+        render_statement_pdf_preview_results(
+            session_factory,
+            user_profile_id=selected_profile_id,
+            account_id=account_id,
+            account_label=account_labels[account_id],
+            source_system=ImportSourceSystem(source_system),
+            preview=preview,
+        )
+    elif stored_preview is not None:
+        st.session_state.pop(STATEMENT_PDF_PREVIEW_KEY, None)
+        st.info(
+            "La previsualización anterior ha caducado. "
+            "Pulsa de nuevo Previsualizar extracto."
+        )
+
+
+def preview_uploaded_statement_pdf(uploaded_file):
+    with NamedTemporaryFile(delete=False, suffix=".pdf") as temporary_file:
+        temporary_path = Path(temporary_file.name)
+        temporary_file.write(uploaded_file.getbuffer())
+
+    try:
+        importer_module = importlib.import_module("lxcell.importers.pdf_statement")
+        importer_module = importlib.reload(importer_module)
+        return importer_module.PdfStatementDryRunImporter().preview(temporary_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def uploaded_statement_pdf_signature(
+    uploaded_file,
+    *,
+    account_id: int,
+    source_system: str,
+) -> tuple[str, int, str, str]:
+    digest = hashlib.sha256(uploaded_file.getbuffer()).hexdigest()
+    return uploaded_file.name, account_id, source_system, digest
+
+
+def stored_statement_pdf_preview_matches(
+    stored_preview,
+    upload_signature: tuple[str, int, str, str],
+) -> bool:
+    preview = stored_preview.get("preview") if isinstance(stored_preview, dict) else None
+    return (
+        isinstance(stored_preview, dict)
+        and stored_preview.get("version") == STATEMENT_PDF_PREVIEW_VERSION
+        and stored_preview.get("signature") == upload_signature
+        and statement_pdf_preview_can_render(preview)
+    )
+
+
+def statement_pdf_preview_can_render(preview) -> bool:
+    return (
+        preview is not None
+        and hasattr(preview, "candidates")
+        and hasattr(preview, "issues")
+        and hasattr(preview, "page_count")
+        and hasattr(preview, "source_file_hash")
+    )
+
+
+def render_statement_pdf_preview_results(
+    session_factory,
+    *,
+    user_profile_id: int,
+    account_id: int,
+    account_label: str,
+    source_system: ImportSourceSystem,
+    preview: PdfStatementPreview,
+) -> None:
+    st.success("Extracto leído en modo previsualización. No se ha guardado nada.")
+
+    duplicate_batch = completed_statement_pdf_import_batch(
+        session_factory,
+        user_profile_id=user_profile_id,
+        account_id=account_id,
+        source_system=source_system,
+        source_file_hash=preview.source_file_hash,
+    )
+    if duplicate_batch is not None:
+        st.warning("Este archivo ya fue importado correctamente para esta cuenta.")
+
+    locked_until = statement_pdf_locked_until(
+        session_factory,
+        user_profile_id=user_profile_id,
+    )
+    protected_count = statement_pdf_protected_candidate_count(
+        preview,
+        locked_until=locked_until,
+    )
+    candidate_column, page_column, issue_column, protected_column = st.columns(4)
+    candidate_column.metric("Movimientos", preview.transaction_count)
+    page_column.metric("Páginas", preview.page_count)
+    issue_column.metric("Incidencias", len(preview.issues))
+    protected_column.metric("Protegidos", protected_count)
+    if protected_count:
+        st.info(
+            "Los movimientos en periodo protegido requerirán permiso adicional "
+            "o se ignorarán en la importación confirmada."
+        )
+
+    st.caption(
+        f"Cuenta: {account_label} · "
+        f"tipo: {source_system.value} · "
+        f"hash: {preview.source_file_hash[:12]}"
+    )
+
+    direction_rows = statement_pdf_direction_rows(preview)
+    if direction_rows:
+        st.subheader("Resumen por dirección")
+        st.dataframe(pd.DataFrame(direction_rows), use_container_width=True)
+
+    issue_rows = statement_pdf_issue_rows(preview)
+    if issue_rows:
+        st.subheader("Incidencias de lectura")
+        st.dataframe(pd.DataFrame(issue_rows), use_container_width=True)
+
+    candidate_rows = statement_pdf_candidate_rows(
+        preview,
+        limit=100,
+        locked_until=locked_until,
+    )
+    if candidate_rows:
+        st.subheader("Primeros movimientos")
+        st.dataframe(pd.DataFrame(candidate_rows), use_container_width=True)
+
+
+def completed_statement_pdf_import_batch(
+    session_factory,
+    *,
+    user_profile_id: int,
+    account_id: int,
+    source_system: ImportSourceSystem,
+    source_file_hash: str,
+):
+    with session_scope(session_factory) as session:
+        repository = AccountingRepository(session)
+        return completed_statement_pdf_import_batch_fallback(
+            repository,
+            user_profile_id=user_profile_id,
+            account_id=account_id,
+            source_system=source_system,
+            source_file_hash=source_file_hash,
+        )
+
+
+def completed_statement_pdf_import_batch_fallback(
+    repository: AccountingRepository,
+    *,
+    user_profile_id: int,
+    account_id: int,
+    source_system: ImportSourceSystem,
+    source_file_hash: str,
+):
+    statement = select(ImportBatch).where(
+        ImportBatch.user_profile_id == user_profile_id,
+        ImportBatch.account_id == account_id,
+        ImportBatch.source_system == source_system,
+        ImportBatch.source_file_hash == source_file_hash,
+        ImportBatch.import_status.in_(
+            [ImportStatus.COMPLETED, ImportStatus.COMPLETED_WITH_WARNINGS]
+        ),
+    )
+    return repository.session.scalar(statement.order_by(ImportBatch.imported_at.desc()))
 
 
 def preview_uploaded_historical_excel(uploaded_file, *, sheet_name: str):
@@ -678,6 +968,18 @@ def render_historical_import_preparation(
         st.error("Este archivo ya fue importado correctamente para este perfil.")
     if category_conflicts:
         st.warning("Hay conflictos de categorías que requieren revisión.")
+    locked_candidate_dates = locked_import_candidate_dates(
+        session_factory,
+        user_profile_id=selected_profile_id,
+        transaction_dates=[
+            candidate.transaction_date for candidate in preview.candidates
+        ],
+    )
+    if locked_candidate_dates:
+        st.warning(
+            "El Excel contiene transacciones en un periodo protegido. "
+            "Necesitas permiso adicional para importarlas."
+        )
 
     if resolved_category_plan:
         st.dataframe(pd.DataFrame(resolved_category_plan), use_container_width=True)
@@ -690,6 +992,12 @@ def render_historical_import_preparation(
     )
     if can_prepare_import:
         confirmed_by = st.text_input("Confirmado por", value="local_ui")
+        locked_period_override = True
+        if locked_candidate_dates:
+            locked_period_override = st.checkbox(
+                "Confirmo que quiero importar transacciones en un periodo protegido",
+                key="historical_import_locked_period_override",
+            )
         user_confirmed = st.checkbox(
             "Confirmo que quiero importar este Excel histórico en la base de datos",
             key="confirm_historical_excel_import",
@@ -707,6 +1015,7 @@ def render_historical_import_preparation(
                     confirmed_by=confirmed_by.strip(),
                     user_confirmed=user_confirmed,
                     category_id_overrides_by_source_name=category_mapping_overrides,
+                    allow_locked_period_override=locked_period_override,
                 )
             except (IntegrityError, ValueError) as exc:
                 st.error(str(exc))
@@ -775,6 +1084,7 @@ def confirm_historical_excel_import_from_preview(
     confirmed_by: str,
     user_confirmed: bool,
     category_id_overrides_by_source_name: dict[str, int] | None = None,
+    allow_locked_period_override: bool = False,
 ):
     with session_scope(session_factory) as session:
         service = HistoricalExcelImportService(AccountingRepository(session))
@@ -786,6 +1096,7 @@ def confirm_historical_excel_import_from_preview(
             category_id_overrides_by_source_name=(
                 category_id_overrides_by_source_name
             ),
+            allow_locked_period_override=allow_locked_period_override,
         )
         session.flush()
         return result
@@ -1072,6 +1383,112 @@ def preview_candidate_rows(
         }
         for candidate in preview.candidates[:limit]
     ]
+
+
+def statement_pdf_candidate_rows(
+    preview: PdfStatementPreview,
+    *,
+    limit: int = 100,
+    locked_until: date | None = None,
+) -> list[dict]:
+    return [
+        {
+            "fila": candidate.row_number_source,
+            "página": candidate.page_number,
+            "fecha": candidate.transaction_date,
+            "fecha valor": candidate.posted_date,
+            "descripción": candidate.description_clean,
+            "importe": format_signed_amount_minor(
+                statement_pdf_signed_amount_minor(candidate)
+            ),
+            "dirección": candidate.direction.value,
+            "periodo": (
+                "protegido"
+                if statement_pdf_candidate_is_locked(
+                    candidate,
+                    locked_until=locked_until,
+                )
+                else "abierto"
+            ),
+            "saldo": (
+                format_signed_amount_minor(candidate.balance_minor)
+                if candidate.balance_minor is not None
+                else ""
+            ),
+            "hash": candidate.content_hash[:12],
+        }
+        for candidate in preview.candidates[:limit]
+    ]
+
+
+def statement_pdf_locked_until(session_factory, *, user_profile_id: int) -> date | None:
+    user_profile = load_user_profile(session_factory, user_profile_id)
+    if user_profile is None:
+        return None
+    return user_profile.transactions_locked_until
+
+
+def statement_pdf_protected_candidate_count(
+    preview: PdfStatementPreview,
+    *,
+    locked_until: date | None,
+) -> int:
+    return sum(
+        1
+        for candidate in preview.candidates
+        if statement_pdf_candidate_is_locked(candidate, locked_until=locked_until)
+    )
+
+
+def statement_pdf_candidate_is_locked(candidate, *, locked_until: date | None) -> bool:
+    return locked_until is not None and candidate.transaction_date <= locked_until
+
+
+def statement_pdf_issue_rows(preview: PdfStatementPreview) -> list[dict]:
+    return [
+        {
+            "página": issue.page_number,
+            "fila": issue.row_number_source or "",
+            "incidencia": issue.message,
+        }
+        for issue in preview.issues
+    ]
+
+
+def statement_pdf_direction_rows(preview: PdfStatementPreview) -> list[dict]:
+    totals: dict[Direction, dict[str, int]] = {}
+    for candidate in preview.candidates:
+        current = totals.setdefault(
+            candidate.direction,
+            {"movimientos": 0, "importe_minor": 0},
+        )
+        current["movimientos"] += 1
+        current["importe_minor"] += statement_pdf_signed_amount_minor(candidate)
+
+    labels = {
+        Direction.INFLOW: "Entrante",
+        Direction.OUTFLOW: "Saliente",
+        Direction.NEUTRAL: "Neutral",
+    }
+    return [
+        {
+            "dirección": labels[direction],
+            "movimientos": values["movimientos"],
+            "importe": format_signed_amount_minor(values["importe_minor"]),
+        }
+        for direction, values in sorted(
+            totals.items(),
+            key=lambda item: item[0].value,
+        )
+    ]
+
+
+def statement_pdf_signed_amount_minor(candidate) -> int:
+    if candidate.direction == Direction.INFLOW:
+        return candidate.amount_minor
+    if candidate.direction == Direction.OUTFLOW:
+        return -candidate.amount_minor
+    return 0
 
 
 def source_totals_by_month_minor(preview: HistoricalExcelPreview) -> dict[str, int]:
@@ -1406,6 +1823,7 @@ def apply_transaction_table_changes(
     edited_rows: list[dict],
     account_ids_by_label: dict[str, int],
     category_ids_by_label: dict[str, int | None],
+    allow_locked_period_override: bool = False,
 ) -> tuple[int, int]:
     original_by_id = {transaction.id: transaction for transaction in original_transactions}
     updated_count = 0
@@ -1421,6 +1839,7 @@ def apply_transaction_table_changes(
                     service,
                     user_profile_id=user_profile_id,
                     transaction_id=transaction_id,
+                    allow_locked_period_override=allow_locked_period_override,
                 )
                 deleted_count += 1
                 continue
@@ -1448,6 +1867,7 @@ def apply_transaction_table_changes(
                     else None
                 ),
                 decided_by="local_ui",
+                allow_locked_period_override=allow_locked_period_override,
             )
             updated_count += 1
 
@@ -1459,12 +1879,14 @@ def soft_delete_transaction_for_ui(
     *,
     user_profile_id: int,
     transaction_id: int,
+    allow_locked_period_override: bool = False,
 ) -> None:
     if hasattr(service, "soft_delete_transaction"):
         service.soft_delete_transaction(
             user_profile_id=user_profile_id,
             transaction_id=transaction_id,
             decided_by="local_ui",
+            allow_locked_period_override=allow_locked_period_override,
         )
         return
 
@@ -1472,6 +1894,36 @@ def soft_delete_transaction_for_ui(
     if transaction is None or transaction.user_profile_id != user_profile_id:
         raise ValueError("Transaction was not found for the user profile.")
     transaction.is_deleted = True
+
+
+def transaction_table_has_locked_period_changes(
+    session_factory,
+    *,
+    user_profile_id: int,
+    original_transactions,
+    edited_rows: list[dict],
+    account_ids_by_label: dict[str, int],
+    category_ids_by_label: dict[str, int | None],
+) -> bool:
+    user_profile = load_user_profile(session_factory, user_profile_id)
+    if user_profile is None:
+        return False
+    original_by_id = {transaction.id: transaction for transaction in original_transactions}
+    dates_to_check: list[date] = []
+    for row in edited_rows:
+        transaction_id = int(row["id"])
+        transaction = original_by_id[transaction_id]
+        if row["eliminar"]:
+            dates_to_check.append(transaction.transaction_date)
+            continue
+        payload = edited_transaction_payload(
+            row,
+            account_ids_by_label=account_ids_by_label,
+            category_ids_by_label=category_ids_by_label,
+        )
+        if transaction_row_changed(transaction, payload):
+            dates_to_check.extend([transaction.transaction_date, payload["transaction_date"]])
+    return bool(protected_transaction_dates(user_profile, dates_to_check))
 
 
 def edited_transaction_payload(
@@ -1550,6 +2002,60 @@ def profile_selector(profiles) -> int | None:
 def load_profiles(session_factory):
     with session_scope(session_factory) as session:
         return AccountingRepository(session).list_user_profiles()
+
+
+def load_user_profile(session_factory, user_profile_id: int):
+    with session_scope(session_factory) as session:
+        return AccountingRepository(session).get_user_profile(user_profile_id)
+
+
+def update_profile_transaction_lock_from_ui(
+    session_factory,
+    *,
+    user_profile_id: int,
+    transactions_locked_until: date | None,
+) -> None:
+    with session_scope(session_factory) as session:
+        service = AccountingService(AccountingRepository(session))
+        service.update_user_profile_transaction_lock(
+            user_profile_id=user_profile_id,
+            transactions_locked_until=transactions_locked_until,
+        )
+
+
+def render_locked_period_override_for_dates(
+    session_factory,
+    *,
+    user_profile_id: int,
+    transaction_dates: list[date],
+    key: str,
+) -> bool:
+    user_profile = load_user_profile(session_factory, user_profile_id)
+    if user_profile is None:
+        return False
+    if not protected_transaction_dates(user_profile, transaction_dates):
+        return False
+
+    st.warning(
+        "La fecha esta en un periodo protegido "
+        f"(hasta {user_profile.transactions_locked_until.isoformat()})."
+    )
+    return st.checkbox(
+        "Confirmo el permiso adicional para operar en el periodo protegido",
+        key=key,
+    )
+
+
+def locked_import_candidate_dates(
+    session_factory,
+    *,
+    user_profile_id: int,
+    transaction_dates: list[date],
+) -> list[date]:
+    user_profile = load_user_profile(session_factory, user_profile_id)
+    if user_profile is None:
+        return []
+    return protected_transaction_dates(user_profile, transaction_dates)
 
 
 def load_categories(session_factory, user_profile_id: int, *, include_inactive: bool = False):
@@ -1659,6 +2165,7 @@ def manual_transaction_payload(
     transaction_type: str,
     payment_method: str,
     decided_by: str,
+    allow_locked_period_override: bool = False,
 ) -> dict:
     return {
         "transaction_date": transaction_date,
@@ -1671,6 +2178,7 @@ def manual_transaction_payload(
         "transaction_type": transaction_type,
         "payment_method": payment_method or None,
         "decided_by": decided_by.strip(),
+        "allow_locked_period_override": allow_locked_period_override,
     }
 
 
@@ -1727,6 +2235,10 @@ def record_manual_transaction_from_payload(
                 else None
             ),
             decided_by=payload["decided_by"],
+            allow_locked_period_override=payload.get(
+                "allow_locked_period_override",
+                False,
+            ),
         )
         session.flush()
         return transaction.id, transaction.review_status

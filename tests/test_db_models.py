@@ -2,7 +2,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import configure_mappers
 
@@ -53,6 +53,20 @@ def test_phase_1_models_configure_and_create_expected_tables(session_factory):
         "transactions",
         "user_profiles",
     }
+
+
+def test_user_profile_stores_transaction_lock_date(session_factory):
+    with session_scope(session_factory) as session:
+        user_profile = UserProfile(
+            display_name="Sample User",
+            transactions_locked_until=date(2026, 1, 31),
+        )
+        session.add(user_profile)
+
+    with session_scope(session_factory) as session:
+        stored_profile = session.scalar(select(UserProfile))
+
+    assert stored_profile.transactions_locked_until == date(2026, 1, 31)
 
 
 def test_enums_are_persisted_as_snake_case_values(session_factory):

@@ -3,15 +3,15 @@
 Last updated: 2026-09-12
 
 This document records the initial design for importing user-provided bank and
-card statements into LXCell. It is intentionally source-format agnostic until
-the first anonymized fixture is available.
+card statements into LXCell. The first supported source format is the Spanish
+PDF statement layout represented by anonymized parser tests.
 
 No real personal finance details should be added here. Use generic source names
 such as `Bank A`, `Card A`, `Merchant A`, and `Sample User`.
 
 ## Review Status
 
-Status: accepted for the first Phase 4 design block.
+Status: first read-only parser implemented.
 
 Accepted:
 
@@ -28,12 +28,28 @@ Accepted:
 - Every created or suggested classification should be recorded through
   `ClassificationDecision`.
 
+Implemented:
+
+- `PdfStatementDryRunImporter` parses the first Spanish PDF statement layout
+  into in-memory candidates without database writes.
+- The parser reads repeated statement table headers, operation date, value date,
+  description, outgoing amount, incoming amount, and balance.
+- The local Streamlit `Importar` tab can preview statement PDFs after the user
+  selects an active account and source type.
+- The preview shows parsed movement count, page count, parse issues, direction
+  totals, first candidate rows, and completed-import file-hash warnings scoped
+  to the selected account.
+- The preview marks rows dated inside the profile's protected historical period
+  when `transactions_locked_until` is configured.
+- Tests generate synthetic anonymized PDFs at runtime; no real statement file is
+  committed.
+
 Open:
 
-- Which concrete statement export format should be implemented first.
-- Whether the first importer should support CSV only or CSV plus XLSX.
+- Whether later importers should support CSV, XLSX, or other account-specific
+  exports.
 - Whether the first UI should allow user-defined column mappings or begin with a
-  source-specific parser for the first export format.
+  source-specific parser for each export format.
 - Whether pending imported transactions should be visually excluded from some
   dashboards until reviewed, even though current reporting includes
   `pending_review` transactions unless they are ignored.
@@ -94,8 +110,10 @@ the selected profile before previewing or confirming.
 Rules:
 
 - `ImportBatch.account_id` is required for bank and card statement imports.
-- Use `source_system = bank_csv` for bank/current-account statement exports.
-- Use `source_system = card_csv` for card statement exports.
+- Use `source_system = bank_pdf` for bank/current-account PDF statement exports.
+- Use `source_system = card_pdf` for card PDF statement exports.
+- Use `source_system = bank_csv` or `card_csv` only for future CSV statement
+  exports.
 - Use `Transaction.source_type = bank_import` for both bank and card file
   imports unless a future enum split becomes useful.
 - Imported transactions inherit `account_id`, `user_profile_id`, and account
@@ -118,7 +136,9 @@ The first workflow should follow this shape:
 5. LXCell checks each candidate normalized hash against prior imported sources
    for the same profile and account.
 6. LXCell runs deterministic classification suggestions.
-7. UI shows preview metrics, blocking errors, duplicate candidates, category
+7. LXCell marks candidates dated on or before the selected profile's
+   `transactions_locked_until` date as protected.
+8. UI shows preview metrics, blocking errors, duplicate candidates, category
    suggestions, and rows that will remain uncategorized.
 
 Preview should be repeatable. Re-previewing the same file should not create
@@ -138,6 +158,9 @@ Rules:
 - Exact duplicate source rows should not create new transactions by default.
 - Rows ignored as exact duplicates should still be traceable through
   `ImportedTransactionSource.import_action`.
+- Rows dated inside the selected profile's protected historical period should
+  not be created by default. A confirmed workflow must either skip those rows
+  with traceability or ask for explicit additional approval before writing them.
 - Non-duplicate rows create `Transaction` records.
 - Confirmed import can use `completed_with_warnings` when rows were skipped as
   duplicates or left uncategorized.
@@ -241,6 +264,7 @@ Row-level normalized hash should include:
 - direction;
 - currency;
 - normalized description;
+- source balance after the movement, when present;
 - source-provided record id when available.
 
 Rules:
@@ -302,10 +326,12 @@ The first implementation PR should be blocked by tests for:
 
 Recommended first slice:
 
-1. Add a source-specific parser for one anonymized CSV fixture.
-2. Add a read-only preview service.
-3. Expose preview in Streamlit.
+1. Add a source-specific parser for one anonymized PDF fixture. Done.
+2. Add a read-only preview service. Partially done at importer level.
+3. Expose preview in Streamlit. Done.
 4. Add duplicate checks against existing import batches and source rows.
+   File-hash checks are done at preview level; row-level source checks remain
+   deferred until confirmed imports create statement source rows.
 5. Defer confirmed write until preview behavior is trusted.
 
 This mirrors the historical Excel approach and keeps the first bank-statement

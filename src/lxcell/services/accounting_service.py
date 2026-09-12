@@ -40,12 +40,26 @@ class AccountingService:
         display_name: str,
         default_currency: str = "EUR",
         locale: str = "es_ES",
+        transactions_locked_until: date | None = None,
     ) -> UserProfile:
         return self.repository.add_user_profile(
             display_name=display_name,
             default_currency=default_currency,
             locale=locale,
+            transactions_locked_until=transactions_locked_until,
         )
+
+    def update_user_profile_transaction_lock(
+        self,
+        *,
+        user_profile_id: int,
+        transactions_locked_until: date | None,
+    ) -> UserProfile:
+        user_profile = self.repository.get_user_profile(user_profile_id)
+        if user_profile is None:
+            raise ValueError("User profile was not found.")
+        user_profile.transactions_locked_until = transactions_locked_until
+        return user_profile
 
     def create_account(
         self,
@@ -148,11 +162,17 @@ class AccountingService:
         description_raw: str | None = None,
         currency: str = "EUR",
         payment_method: PaymentMethod | None = None,
+        allow_locked_period_override: bool = False,
     ) -> Transaction:
         if not description_clean:
             raise ValueError("Manual transactions require description_clean.")
         if not decided_by:
             raise ValueError("Manual transactions require decided_by.")
+        self._ensure_transaction_period_unlocked(
+            user_profile_id=user_profile_id,
+            transaction_dates=[transaction_date],
+            allow_locked_period_override=allow_locked_period_override,
+        )
 
         transaction = self.repository.add_transaction(
             user_profile_id=user_profile_id,
@@ -203,6 +223,7 @@ class AccountingService:
         decided_by: str,
         payment_method: PaymentMethod | None = None,
         notes: str | None = None,
+        allow_locked_period_override: bool = False,
     ) -> ClassificationDecision:
         if not decided_by:
             raise ValueError("Classification confirmation requires decided_by.")
@@ -215,6 +236,11 @@ class AccountingService:
             raise ValueError("Transaction was not found for the user profile.")
         if not transaction.description_clean:
             raise ValueError("Confirmed transactions require description_clean.")
+        self._ensure_transaction_period_unlocked(
+            user_profile_id=user_profile_id,
+            transaction_dates=[transaction.transaction_date],
+            allow_locked_period_override=allow_locked_period_override,
+        )
 
         self._supersede_classification_decisions(
             transaction_id=transaction_id,
@@ -255,6 +281,7 @@ class AccountingService:
         decided_by: str,
         category_id: int | None = None,
         payment_method: PaymentMethod | None = None,
+        allow_locked_period_override: bool = False,
     ) -> Transaction:
         if not description_clean:
             raise ValueError("Manual transactions require description_clean.")
@@ -269,6 +296,11 @@ class AccountingService:
             raise ValueError("Transaction was not found for the user profile.")
         if transaction.is_deleted:
             raise ValueError("Deleted transactions cannot be edited.")
+        self._ensure_transaction_period_unlocked(
+            user_profile_id=user_profile_id,
+            transaction_dates=[transaction.transaction_date, transaction_date],
+            allow_locked_period_override=allow_locked_period_override,
+        )
 
         classification_changed = (
             transaction.category_id != category_id
@@ -312,6 +344,7 @@ class AccountingService:
         user_profile_id: int,
         transaction_id: int,
         decided_by: str,
+        allow_locked_period_override: bool = False,
     ) -> Transaction:
         if not decided_by:
             raise ValueError("Manual transaction deletion requires decided_by.")
@@ -322,8 +355,31 @@ class AccountingService:
         )
         if transaction is None:
             raise ValueError("Transaction was not found for the user profile.")
+        self._ensure_transaction_period_unlocked(
+            user_profile_id=user_profile_id,
+            transaction_dates=[transaction.transaction_date],
+            allow_locked_period_override=allow_locked_period_override,
+        )
         transaction.is_deleted = True
         return transaction
+
+    def _ensure_transaction_period_unlocked(
+        self,
+        *,
+        user_profile_id: int,
+        transaction_dates: list[date],
+        allow_locked_period_override: bool = False,
+    ) -> None:
+        if allow_locked_period_override:
+            return
+        user_profile = self.repository.get_user_profile(user_profile_id)
+        if user_profile is None:
+            raise ValueError("User profile was not found.")
+        if protected_transaction_dates(user_profile, transaction_dates):
+            raise ValueError(
+                "La fecha esta en un periodo protegido. "
+                "Confirma el permiso adicional para continuar."
+            )
 
     def _record_manual_audit_source(
         self,
@@ -365,4 +421,18 @@ class AccountingService:
                 decision.superseded_at = superseded_at
 
 
-__all__ = ["AccountingService"]
+def protected_transaction_dates(
+    user_profile: UserProfile,
+    transaction_dates: list[date],
+) -> list[date]:
+    locked_until = user_profile.transactions_locked_until
+    if locked_until is None:
+        return []
+    return [
+        transaction_date
+        for transaction_date in transaction_dates
+        if transaction_date <= locked_until
+    ]
+
+
+__all__ = ["AccountingService", "protected_transaction_dates"]

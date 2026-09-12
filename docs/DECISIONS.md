@@ -328,7 +328,7 @@ Decision: start Phase 4 with preview-first imports for user-provided bank and ca
 
 Reason: statement files represent known account activity, unlike historical Excel workbooks that mixed account provenance. Requiring a selected account keeps reports, duplicate detection, and audit trails scoped correctly. A preview-first flow preserves the trust model established during historical Excel imports.
 
-Implication: `ImportBatch.account_id` is required for bank and card statement imports, even though it remains nullable for manual entries and historical Excel. The original statement file is not stored in the database or committed to the repository. The first implementation should use anonymized fixtures and can begin with one concrete export format before generalizing column mapping.
+Implication: `ImportBatch.account_id` is required for bank and card statement imports, even though it remains nullable for manual entries and historical Excel. The original statement file is not stored in the database or committed to the repository. The first implementation should use anonymized fixtures and can begin with one concrete PDF export format before generalizing column mapping.
 
 Detailed review log: `docs/phase_4_statement_import.md`.
 
@@ -339,3 +339,27 @@ Decision: the first statement import classifier should use deterministic, high-p
 Reason: the useful goal is to reduce repetitive manual categorization without silently polluting the ledger. Bank descriptions are not category definitions, so statement imports should not create categories from source text. Deterministic classification keeps behavior explainable before AI or merchant normalization are introduced.
 
 Implication: imported transactions may receive a category automatically while still keeping `review_status = pending_review` until the user reviews the transaction. Suggested classifications should be visible in the UI and recorded append-only. User corrections supersede previous decisions rather than deleting them. Merchant normalization, AI classification, transfer matching, and broader rule management remain later work.
+
+## 2026-09-12 - First PDF Statement Preview Parser
+
+Decision: implement the first statement importer as a read-only PDF parser using `pdfplumber`. The parser supports the first Spanish statement layout by reading repeated page headers and extracting operation date, value date, description, outgoing amount, incoming amount, balance, file hash, page number, source row number, compact raw payload, and deterministic content hashes.
+
+Reason: the first real statement source available for design is a PDF export. Supporting it directly lets LXCell start reducing manual entry while preserving the preview-first safety model. Synthetic PDFs generated in tests allow parser behavior to be covered without committing sensitive statement files.
+
+Implication: `pdfplumber` is now a runtime dependency. Source systems include `bank_pdf` and `card_pdf` for future confirmed imports. The parser does not write import batches or transactions and does not classify categories; those remain future Phase 4/5 slices.
+
+## 2026-09-12 - PDF Statement Preview UI
+
+Decision: expose the read-only PDF statement parser in the local Streamlit `Importar` tab. The preview requires an active account and a statement source type, stores the uploaded file only in a temporary parser file, shows aggregate parse results and the first candidate rows, and warns when a completed import batch already exists for the same profile, account, source system, and file hash.
+
+Reason: the user needs to inspect whether a statement PDF is understood before LXCell writes transactions or suggests categories. Account selection belongs in the preview because statement imports are account-specific and duplicate checks must not cross account boundaries.
+
+Implication: the UI still performs no confirmed statement import writes. Row-level duplicate checks, category suggestions, transaction creation, and review flows remain future Phase 4/5 slices.
+
+## 2026-09-12 - Profile Historical Transaction Lock
+
+Decision: add an optional `transactions_locked_until` date to each user profile. Transactions dated on or before that date are considered protected and require an explicit override before they can be created, edited, soft-deleted, classified, or imported.
+
+Reason: historical Excel imports may already represent the user's reviewed manual history. When later statement imports overlap that period, LXCell should not silently duplicate or rewrite settled history.
+
+Implication: manual entry, transaction table edits, classification confirmations, soft deletes, and confirmed historical Excel imports must enforce the profile lock. The local UI exposes the lock in configuration and asks for an additional confirmation when a requested write touches the protected period. Statement PDF preview remains read-only, but marks protected candidate rows so the confirmed statement import workflow can later skip or require explicit override for overlapping history.

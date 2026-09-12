@@ -80,6 +80,7 @@ Key fields:
 - `display_name`
 - `default_currency`
 - `locale`
+- `transactions_locked_until`
 - `is_active`
 - `created_at`
 - `updated_at`
@@ -89,6 +90,10 @@ Rules:
 - All accounts, categories, budgets, imports, and transactions belong to one user profile.
 - Cross-profile data must not be mixed in reports.
 - `locale` defaults to `es_ES` unless the profile needs a different display locale.
+- `transactions_locked_until` is optional. When present, transactions dated on
+  or before that date are protected historical records.
+- Creating, editing, soft-deleting, classifying, or importing protected
+  transactions requires an explicit user override in the application workflow.
 
 ### Account
 
@@ -448,7 +453,9 @@ Suggested `source_system` values:
 
 - `excel_historical`
 - `bank_csv`
+- `bank_pdf`
 - `card_csv`
+- `card_pdf`
 - `manual_entry`
 - `api`
 - `other`
@@ -466,6 +473,10 @@ Rules:
 - `account_id` can be null because some historical import files can contain transactions from multiple accounts or omit account provenance.
 - `account_id` is required for bank and card statement imports because those
   files represent activity for one selected account.
+- Confirmed imports must respect the selected profile's
+  `transactions_locked_until` date. Protected rows should be blocked, skipped,
+  or require explicit additional user approval depending on the reviewed import
+  workflow.
 - `source_file_name` and `source_file_hash` can be null for manual entries and non-file sources.
 - `source_file_hash` is required for file imports when available to support duplicate import detection.
 - The original file should not be stored in the database by default.
@@ -507,7 +518,9 @@ Rules:
 - `normalized_hash` should support duplicate detection across repeated imports.
 - For statement imports, normalized hashes should be scoped by profile, account,
   source system, dates, amount, direction, currency, normalized description, and
-  source-provided record id when available.
+  source-provided record id when available. Statement balance after the movement
+  can be included when present because it helps distinguish otherwise identical
+  source rows.
 - One source record should create at most one transaction.
 
 ### ImportValidationIssue

@@ -51,12 +51,14 @@ class AccountingRepository:
         default_currency: str = "EUR",
         locale: str = "es_ES",
         is_active: bool = True,
+        transactions_locked_until: date | None = None,
     ) -> UserProfile:
         user_profile = UserProfile(
             display_name=display_name,
             default_currency=default_currency,
             locale=locale,
             is_active=is_active,
+            transactions_locked_until=transactions_locked_until,
         )
         self.session.add(user_profile)
         return user_profile

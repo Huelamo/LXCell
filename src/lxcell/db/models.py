@@ -84,6 +84,7 @@ class UserProfile(IdMixin, TimestampMixin, Base):
     default_currency: Mapped[str] = mapped_column(String(3), default="EUR", nullable=False)
     locale: Mapped[str] = mapped_column(String(20), default="es_ES", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    transactions_locked_until: Mapped[date | None] = mapped_column(Date)
 
     accounts: Mapped[list["Account"]] = relationship(back_populates="user_profile")
     categories: Mapped[list["Category"]] = relationship(back_populates="user_profile")
