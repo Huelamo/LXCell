@@ -85,12 +85,15 @@ Expected result:
 
 Current design direction:
 
-- Start with preview-first imports for user-provided bank or card statement
-  exports, requiring the user to select an existing account.
+- Start with preview-first imports for user-provided Spanish PDF bank or card
+  statement exports, requiring the user to select an existing account.
 - Preserve file and row-level audit metadata without storing original files.
 - Combine file-hash and normalized row-hash duplicate detection.
 - Run conservative deterministic category suggestions against existing active
   categories, leaving uncertain rows pending review.
+- First read-only PDF parser implemented; Streamlit preview, account-scoped
+  duplicate checks, classification suggestions, and confirmed writes remain
+  follow-up work.
 
 Detailed review log: `docs/phase_4_statement_import.md`.
 

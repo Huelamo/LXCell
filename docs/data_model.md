@@ -448,7 +448,9 @@ Suggested `source_system` values:
 
 - `excel_historical`
 - `bank_csv`
+- `bank_pdf`
 - `card_csv`
+- `card_pdf`
 - `manual_entry`
 - `api`
 - `other`
@@ -507,7 +509,9 @@ Rules:
 - `normalized_hash` should support duplicate detection across repeated imports.
 - For statement imports, normalized hashes should be scoped by profile, account,
   source system, dates, amount, direction, currency, normalized description, and
-  source-provided record id when available.
+  source-provided record id when available. Statement balance after the movement
+  can be included when present because it helps distinguish otherwise identical
+  source rows.
 - One source record should create at most one transaction.
 
 ### ImportValidationIssue

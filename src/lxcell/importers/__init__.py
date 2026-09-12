@@ -7,6 +7,13 @@ from lxcell.importers.excel_historical import (
     HistoricalExcelTrackingValidation,
     HistoricalExcelTransactionCandidate,
 )
+from lxcell.importers.pdf_statement import (
+    PdfStatementDryRunImporter,
+    PdfStatementParseIssue,
+    PdfStatementPreview,
+    PdfStatementTransactionCandidate,
+    statement_row_normalized_hash,
+)
 
 __all__ = [
     "HistoricalExcelDryRunImporter",
@@ -14,4 +21,9 @@ __all__ = [
     "HistoricalExcelTrackingComparison",
     "HistoricalExcelTrackingValidation",
     "HistoricalExcelTransactionCandidate",
+    "PdfStatementDryRunImporter",
+    "PdfStatementParseIssue",
+    "PdfStatementPreview",
+    "PdfStatementTransactionCandidate",
+    "statement_row_normalized_hash",
 ]

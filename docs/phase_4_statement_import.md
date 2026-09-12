@@ -3,15 +3,15 @@
 Last updated: 2026-09-12
 
 This document records the initial design for importing user-provided bank and
-card statements into LXCell. It is intentionally source-format agnostic until
-the first anonymized fixture is available.
+card statements into LXCell. The first supported source format is the Spanish
+PDF statement layout represented by anonymized parser tests.
 
 No real personal finance details should be added here. Use generic source names
 such as `Bank A`, `Card A`, `Merchant A`, and `Sample User`.
 
 ## Review Status
 
-Status: accepted for the first Phase 4 design block.
+Status: first read-only parser implemented.
 
 Accepted:
 
@@ -28,12 +28,21 @@ Accepted:
 - Every created or suggested classification should be recorded through
   `ClassificationDecision`.
 
+Implemented:
+
+- `PdfStatementDryRunImporter` parses the first Spanish PDF statement layout
+  into in-memory candidates without database writes.
+- The parser reads repeated statement table headers, operation date, value date,
+  description, outgoing amount, incoming amount, and balance.
+- Tests generate synthetic anonymized PDFs at runtime; no real statement file is
+  committed.
+
 Open:
 
-- Which concrete statement export format should be implemented first.
-- Whether the first importer should support CSV only or CSV plus XLSX.
+- Whether later importers should support CSV, XLSX, or other account-specific
+  exports.
 - Whether the first UI should allow user-defined column mappings or begin with a
-  source-specific parser for the first export format.
+  source-specific parser for each export format.
 - Whether pending imported transactions should be visually excluded from some
   dashboards until reviewed, even though current reporting includes
   `pending_review` transactions unless they are ignored.
@@ -94,8 +103,10 @@ the selected profile before previewing or confirming.
 Rules:
 
 - `ImportBatch.account_id` is required for bank and card statement imports.
-- Use `source_system = bank_csv` for bank/current-account statement exports.
-- Use `source_system = card_csv` for card statement exports.
+- Use `source_system = bank_pdf` for bank/current-account PDF statement exports.
+- Use `source_system = card_pdf` for card PDF statement exports.
+- Use `source_system = bank_csv` or `card_csv` only for future CSV statement
+  exports.
 - Use `Transaction.source_type = bank_import` for both bank and card file
   imports unless a future enum split becomes useful.
 - Imported transactions inherit `account_id`, `user_profile_id`, and account
@@ -241,6 +252,7 @@ Row-level normalized hash should include:
 - direction;
 - currency;
 - normalized description;
+- source balance after the movement, when present;
 - source-provided record id when available.
 
 Rules:
@@ -302,8 +314,8 @@ The first implementation PR should be blocked by tests for:
 
 Recommended first slice:
 
-1. Add a source-specific parser for one anonymized CSV fixture.
-2. Add a read-only preview service.
+1. Add a source-specific parser for one anonymized PDF fixture. Done.
+2. Add a read-only preview service. Partially done at importer level.
 3. Expose preview in Streamlit.
 4. Add duplicate checks against existing import batches and source rows.
 5. Defer confirmed write until preview behavior is trusted.

@@ -328,7 +328,7 @@ Decision: start Phase 4 with preview-first imports for user-provided bank and ca
 
 Reason: statement files represent known account activity, unlike historical Excel workbooks that mixed account provenance. Requiring a selected account keeps reports, duplicate detection, and audit trails scoped correctly. A preview-first flow preserves the trust model established during historical Excel imports.
 
-Implication: `ImportBatch.account_id` is required for bank and card statement imports, even though it remains nullable for manual entries and historical Excel. The original statement file is not stored in the database or committed to the repository. The first implementation should use anonymized fixtures and can begin with one concrete export format before generalizing column mapping.
+Implication: `ImportBatch.account_id` is required for bank and card statement imports, even though it remains nullable for manual entries and historical Excel. The original statement file is not stored in the database or committed to the repository. The first implementation should use anonymized fixtures and can begin with one concrete PDF export format before generalizing column mapping.
 
 Detailed review log: `docs/phase_4_statement_import.md`.
 
@@ -339,3 +339,11 @@ Decision: the first statement import classifier should use deterministic, high-p
 Reason: the useful goal is to reduce repetitive manual categorization without silently polluting the ledger. Bank descriptions are not category definitions, so statement imports should not create categories from source text. Deterministic classification keeps behavior explainable before AI or merchant normalization are introduced.
 
 Implication: imported transactions may receive a category automatically while still keeping `review_status = pending_review` until the user reviews the transaction. Suggested classifications should be visible in the UI and recorded append-only. User corrections supersede previous decisions rather than deleting them. Merchant normalization, AI classification, transfer matching, and broader rule management remain later work.
+
+## 2026-09-12 - First PDF Statement Preview Parser
+
+Decision: implement the first statement importer as a read-only PDF parser using `pdfplumber`. The parser supports the first Spanish statement layout by reading repeated page headers and extracting operation date, value date, description, outgoing amount, incoming amount, balance, file hash, page number, source row number, compact raw payload, and deterministic content hashes.
+
+Reason: the first real statement source available for design is a PDF export. Supporting it directly lets LXCell start reducing manual entry while preserving the preview-first safety model. Synthetic PDFs generated in tests allow parser behavior to be covered without committing sensitive statement files.
+
+Implication: `pdfplumber` is now a runtime dependency. Source systems include `bank_pdf` and `card_pdf` for future confirmed imports. The current parser does not write import batches or transactions, does not classify categories, and does not expose a UI yet; those remain the next Phase 4 slices.
