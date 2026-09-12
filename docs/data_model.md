@@ -1,6 +1,6 @@
 # LXCell Data Model
 
-Last updated: 2026-08-17
+Last updated: 2026-09-12
 
 ## Purpose
 
@@ -464,6 +464,8 @@ Suggested `import_status` values:
 Rules:
 
 - `account_id` can be null because some historical import files can contain transactions from multiple accounts or omit account provenance.
+- `account_id` is required for bank and card statement imports because those
+  files represent activity for one selected account.
 - `source_file_name` and `source_file_hash` can be null for manual entries and non-file sources.
 - `source_file_hash` is required for file imports when available to support duplicate import detection.
 - The original file should not be stored in the database by default.
@@ -503,6 +505,9 @@ Rules:
 - Keep raw values compact but sufficient for audit.
 - `payload_raw_json` should store source columns and values exactly as imported where practical.
 - `normalized_hash` should support duplicate detection across repeated imports.
+- For statement imports, normalized hashes should be scoped by profile, account,
+  source system, dates, amount, direction, currency, normalized description, and
+  source-provided record id when available.
 - One source record should create at most one transaction.
 
 ### ImportValidationIssue
@@ -585,6 +590,11 @@ Rules:
 - Rule output should create a `ClassificationDecision`, not silently overwrite a transaction.
 - Phase 1 classification rules should suggest classifications only. They should not automatically confirm transactions.
 - `auto_apply` should remain false in Phase 1. It is included as an explicit future extension point.
+- During statement import work, `auto_apply` can be enabled only for
+  high-confidence deterministic rules or repeated user-confirmed history with no
+  competing category. Auto-assignment should update the transaction
+  classification while keeping imported transactions pending review until the
+  user reviews them.
 - Merchant-based rules are deferred until merchant normalization is introduced.
 - `confidence` should be stored as an exact decimal value from `0.0000` to `1.0000`.
 
@@ -805,6 +815,7 @@ Accepted for Phase 1:
 
 Still open:
 
-- When should `merchants` be introduced to support classification automation?
+- When should `merchants` be introduced to support classification automation
+  beyond high-confidence statement description rules?
 - Which generic category fixtures should be used for public tests?
 - When should Alembic be introduced for schema migrations?
