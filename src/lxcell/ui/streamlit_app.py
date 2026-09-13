@@ -31,9 +31,10 @@ from lxcell.enums.core_enums import (
 )
 from lxcell.importers import HistoricalExcelPreview, PdfStatementPreview
 from lxcell.repositories import AccountingRepository
-from lxcell.services import AccountingService, StatementPdfImportService
+from lxcell.services import AccountingService
 from lxcell.services.accounting_service import protected_transaction_dates
 from lxcell.services.historical_excel_import_service import HistoricalExcelImportService
+from lxcell.services.statement_pdf_import_service import StatementPdfImportService
 
 PENDING_DUPLICATE_TRANSACTION_KEY = "lxcell_pending_duplicate_transaction"
 HISTORICAL_EXCEL_PREVIEW_KEY = "lxcell_historical_excel_preview"
