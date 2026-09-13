@@ -1,6 +1,6 @@
 # Phase 4 Statement Import Design
 
-Last updated: 2026-09-12
+Last updated: 2026-09-13
 
 This document records the initial design for importing user-provided bank and
 card statements into LXCell. The first supported source format is the Spanish
@@ -11,7 +11,7 @@ such as `Bank A`, `Card A`, `Merchant A`, and `Sample User`.
 
 ## Review Status
 
-Status: first read-only parser implemented.
+Status: first confirmed PDF import implemented.
 
 Accepted:
 
@@ -41,6 +41,11 @@ Implemented:
   to the selected account.
 - The preview marks rows dated inside the profile's protected historical period
   when `transactions_locked_until` is configured.
+- `StatementPdfImportService` can confirm a reviewed PDF preview into the
+  database, creating account-scoped import audit rows and pending transactions
+  only for rows that should enter the ledger.
+- The local Streamlit `Importar` tab exposes the confirmed PDF save action after
+  preview, with normal confirmation plus an optional protected-period override.
 - Tests generate synthetic anonymized PDFs at runtime; no real statement file is
   committed.
 
@@ -55,6 +60,9 @@ Open:
   `pending_review` transactions unless they are ignored.
 - When to introduce merchant normalization as a separate table.
 - When to introduce transfer matching between accounts.
+- Whether protected rows ignored in a completed statement import should have a
+  dedicated reimport/override workflow later, or remain part of the deferred
+  replace/reimport design.
 
 ## Product Goal
 
@@ -133,13 +141,10 @@ The first workflow should follow this shape:
    database.
 4. LXCell checks whether a completed import already exists for the same profile,
    account, source system, and file hash.
-5. LXCell checks each candidate normalized hash against prior imported sources
-   for the same profile and account.
-6. LXCell runs deterministic classification suggestions.
-7. LXCell marks candidates dated on or before the selected profile's
+5. LXCell marks candidates dated on or before the selected profile's
    `transactions_locked_until` date as protected.
-8. UI shows preview metrics, blocking errors, duplicate candidates, category
-   suggestions, and rows that will remain uncategorized.
+6. UI shows preview metrics, blocking errors, protected rows, and rows that
+   will remain uncategorized.
 
 Preview should be repeatable. Re-previewing the same file should not create
 database rows.
@@ -155,15 +160,18 @@ Rules:
 - Files with blocking parse errors cannot be imported.
 - A previously completed import with the same profile, account, source system,
   and file hash blocks confirmation.
+- Confirmation checks each candidate normalized hash against prior imported
+  sources for the same profile and account.
 - Exact duplicate source rows should not create new transactions by default.
 - Rows ignored as exact duplicates should still be traceable through
   `ImportedTransactionSource.import_action`.
 - Rows dated inside the selected profile's protected historical period should
   not be created by default. A confirmed workflow must either skip those rows
   with traceability or ask for explicit additional approval before writing them.
-- Non-duplicate rows create `Transaction` records.
+- Non-duplicate, non-protected rows create `Transaction` records.
 - Confirmed import can use `completed_with_warnings` when rows were skipped as
-  duplicates or left uncategorized.
+  duplicates or protected-period rows. Uncategorized pending rows are expected
+  in this first slice.
 - Rollback should soft-delete transactions created by the import and mark the
   batch as `rolled_back`; audit rows should remain.
 
@@ -330,9 +338,9 @@ Recommended first slice:
 2. Add a read-only preview service. Partially done at importer level.
 3. Expose preview in Streamlit. Done.
 4. Add duplicate checks against existing import batches and source rows.
-   File-hash checks are done at preview level; row-level source checks remain
-   deferred until confirmed imports create statement source rows.
-5. Defer confirmed write until preview behavior is trusted.
+   Done for file-hash and exact normalized row-hash checks in confirmed imports.
+5. Add confirmed database writes from reviewed previews. Done.
+6. Add deterministic classification suggestions. Deferred.
 
 This mirrors the historical Excel approach and keeps the first bank-statement
 PR small enough to review.

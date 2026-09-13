@@ -107,6 +107,13 @@ class AccountingRepository:
             statement = statement.where(Account.is_active.is_(True))
         return list(self.session.scalars(statement.order_by(Account.name, Account.id)))
 
+    def get_account(self, *, account_id: int, user_profile_id: int) -> Account | None:
+        statement = select(Account).where(
+            Account.id == account_id,
+            Account.user_profile_id == user_profile_id,
+        )
+        return self.session.scalar(statement)
+
     def add_category(
         self,
         *,
@@ -307,6 +314,28 @@ class AccountingRepository:
         )
         return self.session.scalar(statement.order_by(ImportBatch.imported_at.desc()))
 
+    def get_completed_import_batch_by_file_hash_for_account(
+        self,
+        *,
+        user_profile_id: int,
+        account_id: int,
+        source_system: ImportSourceSystem,
+        source_file_hash: str,
+    ) -> ImportBatch | None:
+        statement = select(ImportBatch).where(
+            ImportBatch.user_profile_id == user_profile_id,
+            ImportBatch.account_id == account_id,
+            ImportBatch.source_system == source_system,
+            ImportBatch.source_file_hash == source_file_hash,
+            ImportBatch.import_status.in_(
+                [
+                    ImportStatus.COMPLETED,
+                    ImportStatus.COMPLETED_WITH_WARNINGS,
+                ]
+            ),
+        )
+        return self.session.scalar(statement.order_by(ImportBatch.imported_at.desc()))
+
     def get_import_batch(
         self, *, import_batch_id: int, user_profile_id: int
     ) -> ImportBatch | None:
@@ -328,6 +357,32 @@ class AccountingRepository:
             .join(ImportBatch)
             .where(
                 ImportBatch.user_profile_id == user_profile_id,
+                ImportBatch.source_system == source_system,
+                ImportBatch.import_status.in_(
+                    [
+                        ImportStatus.COMPLETED,
+                        ImportStatus.COMPLETED_WITH_WARNINGS,
+                    ]
+                ),
+                ImportedTransactionSource.normalized_hash == normalized_hash,
+            )
+        )
+        return self.session.scalar(statement.order_by(ImportedTransactionSource.id))
+
+    def get_imported_source_by_normalized_hash_for_account(
+        self,
+        *,
+        user_profile_id: int,
+        account_id: int,
+        source_system: ImportSourceSystem,
+        normalized_hash: str,
+    ) -> ImportedTransactionSource | None:
+        statement = (
+            select(ImportedTransactionSource)
+            .join(ImportBatch)
+            .where(
+                ImportBatch.user_profile_id == user_profile_id,
+                ImportBatch.account_id == account_id,
                 ImportBatch.source_system == source_system,
                 ImportBatch.import_status.in_(
                     [

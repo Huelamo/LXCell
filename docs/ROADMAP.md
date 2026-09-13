@@ -1,6 +1,6 @@
 # LXCell Roadmap
 
-Last updated: 2026-09-12
+Last updated: 2026-09-13
 
 ## Phase 0 - Project Foundation
 
@@ -93,9 +93,9 @@ Current design direction:
   categories, leaving uncertain rows pending review.
 - Respect each profile's historical transaction lock so statement imports that
   overlap already reviewed history are not written silently.
-- First read-only PDF parser and Streamlit preview implemented;
-  protected-period markers are shown in preview, and classification suggestions
-  plus confirmed writes remain follow-up work.
+- First PDF parser, Streamlit preview, protected-period markers, and confirmed
+  PDF writes are implemented. Deterministic classification suggestions remain
+  follow-up work.
 
 Detailed review log: `docs/phase_4_statement_import.md`.
 

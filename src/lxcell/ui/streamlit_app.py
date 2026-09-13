@@ -31,7 +31,7 @@ from lxcell.enums.core_enums import (
 )
 from lxcell.importers import HistoricalExcelPreview, PdfStatementPreview
 from lxcell.repositories import AccountingRepository
-from lxcell.services import AccountingService
+from lxcell.services import AccountingService, StatementPdfImportService
 from lxcell.services.accounting_service import protected_transaction_dates
 from lxcell.services.historical_excel_import_service import HistoricalExcelImportService
 
@@ -578,6 +578,7 @@ def render_import_preview(session_factory, selected_profile_id: int | None) -> N
 
 def render_statement_pdf_preview(session_factory, selected_profile_id: int) -> None:
     st.subheader("Importar extracto PDF")
+    render_flash_success("statement_pdf_import")
 
     accounts, _ = load_accounting_lists(
         session_factory,
@@ -761,6 +762,126 @@ def render_statement_pdf_preview_results(
     if candidate_rows:
         st.subheader("Primeros movimientos")
         st.dataframe(pd.DataFrame(candidate_rows), use_container_width=True)
+
+    render_statement_pdf_import_confirmation(
+        session_factory,
+        user_profile_id=user_profile_id,
+        account_id=account_id,
+        source_system=source_system,
+        preview=preview,
+        duplicate_batch=duplicate_batch,
+        protected_count=protected_count,
+    )
+
+
+def render_statement_pdf_import_confirmation(
+    session_factory,
+    *,
+    user_profile_id: int,
+    account_id: int,
+    source_system: ImportSourceSystem,
+    preview: PdfStatementPreview,
+    duplicate_batch,
+    protected_count: int,
+) -> None:
+    st.subheader("Guardar extracto")
+    if duplicate_batch is not None:
+        st.info("No se puede guardar porque este archivo ya consta como importado.")
+        return
+    if preview.issues:
+        st.info("Corrige las incidencias de lectura antes de guardar el extracto.")
+        return
+    if preview.transaction_count == 0:
+        st.info("No hay movimientos que guardar.")
+        return
+
+    open_count = preview.transaction_count - protected_count
+    if protected_count:
+        st.caption(
+            f"Por defecto se guardarán {open_count} movimiento(s) y se ignorarán "
+            f"{protected_count} movimiento(s) del periodo protegido con traza de auditoría."
+        )
+    else:
+        st.caption(f"Se guardarán hasta {preview.transaction_count} movimiento(s).")
+
+    with st.form("confirm_statement_pdf_import"):
+        confirmed_by = st.text_input(
+            "Confirmado por",
+            value="local_ui",
+            key="statement_pdf_confirmed_by",
+        )
+        import_protected = False
+        if protected_count:
+            import_protected = st.checkbox(
+                "Confirmo que quiero importar también movimientos del periodo protegido",
+                key="statement_pdf_locked_period_override",
+            )
+        user_confirmed = st.checkbox(
+            "Confirmo que quiero guardar este extracto en la base de datos",
+            key="confirm_statement_pdf_import",
+        )
+        submitted = st.form_submit_button("Guardar extracto")
+
+    if not submitted:
+        return
+    try:
+        result = confirm_statement_pdf_import_from_preview(
+            session_factory,
+            user_profile_id=user_profile_id,
+            account_id=account_id,
+            source_system=source_system,
+            preview=preview,
+            confirmed_by=confirmed_by.strip(),
+            user_confirmed=user_confirmed,
+            allow_locked_period_override=import_protected,
+        )
+    except (IntegrityError, ValueError) as exc:
+        st.error(str(exc))
+        return
+
+    st.session_state.pop(STATEMENT_PDF_PREVIEW_KEY, None)
+    flash_success(
+        "statement_pdf_import",
+        statement_pdf_import_success_message(result),
+    )
+    st.rerun()
+
+
+def confirm_statement_pdf_import_from_preview(
+    session_factory,
+    *,
+    user_profile_id: int,
+    account_id: int,
+    source_system: ImportSourceSystem,
+    preview: PdfStatementPreview,
+    confirmed_by: str,
+    user_confirmed: bool,
+    allow_locked_period_override: bool = False,
+):
+    with session_scope(session_factory) as session:
+        service = StatementPdfImportService(AccountingRepository(session))
+        result = service.confirm_import(
+            user_profile_id=user_profile_id,
+            account_id=account_id,
+            source_system=source_system,
+            preview=preview,
+            confirmed_by=confirmed_by,
+            user_confirmed=user_confirmed,
+            allow_locked_period_override=allow_locked_period_override,
+        )
+        session.flush()
+        return result
+
+
+def statement_pdf_import_success_message(result) -> str:
+    parts = [f"{result.transaction_count} transacción(es) creada(s)"]
+    if result.ignored_protected_count:
+        parts.append(f"{result.ignored_protected_count} protegida(s) ignorada(s)")
+    if result.matched_existing_count:
+        parts.append(f"{result.matched_existing_count} duplicada(s) existente(s)")
+    if result.marked_duplicate_count:
+        parts.append(f"{result.marked_duplicate_count} duplicada(s) en el archivo")
+    return "Extracto guardado: " + ", ".join(parts)
 
 
 def completed_statement_pdf_import_batch(

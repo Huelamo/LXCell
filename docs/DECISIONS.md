@@ -363,3 +363,11 @@ Decision: add an optional `transactions_locked_until` date to each user profile.
 Reason: historical Excel imports may already represent the user's reviewed manual history. When later statement imports overlap that period, LXCell should not silently duplicate or rewrite settled history.
 
 Implication: manual entry, transaction table edits, classification confirmations, soft deletes, and confirmed historical Excel imports must enforce the profile lock. The local UI exposes the lock in configuration and asks for an additional confirmation when a requested write touches the protected period. Statement PDF preview remains read-only, but marks protected candidate rows so the confirmed statement import workflow can later skip or require explicit override for overlapping history.
+
+## 2026-09-13 - Confirmed PDF Statement Import
+
+Decision: implement confirmed PDF statement imports through `StatementPdfImportService`. The workflow writes from an already parsed `PdfStatementPreview`, requires a selected active account and explicit user confirmation, creates an account-scoped `ImportBatch`, stores one `ImportedTransactionSource` per parsed row, creates transactions only for rows that should enter the ledger, and leaves created transactions as `pending_review`.
+
+Reason: the PDF preview is now trusted enough to start reducing manual transaction entry, but classification automation is still separate work. The import should therefore prioritize source traceability, duplicate protection, and preserving the user's reviewed historical period.
+
+Implication: repeated completed file hashes are blocked per profile, account, and source system. Existing row hashes are recorded as `matched_existing` without creating duplicate transactions. Rows inside the profile's protected historical period are recorded as `ignored` by default and create no transaction unless the user grants the explicit protected-period override. Duplicate rows inside the same preview are recorded as `marked_duplicate`. Outflows default to `expense`, inflows default to `adjustment`, and no categories are assigned until deterministic classification or user review is implemented.

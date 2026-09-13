@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from lxcell.db.models import Base, CategoryMapping, ImportBatch
+from lxcell.db.models import Base, CategoryMapping, ImportBatch, Transaction
 from lxcell.db.session import create_session_factory, create_sqlite_engine, session_scope
 from lxcell.enums.core_enums import (
     AccountType,
@@ -25,7 +25,7 @@ from lxcell.importers import (
     PdfStatementTransactionCandidate,
 )
 from lxcell.repositories import AccountingRepository
-from lxcell.services import AccountingService
+from lxcell.services import AccountingService, StatementPdfImportResult
 from lxcell.ui.streamlit_app import (
     HISTORICAL_EXCEL_PREVIEW_VERSION,
     STATEMENT_PDF_PREVIEW_VERSION,
@@ -36,6 +36,7 @@ from lxcell.ui.streamlit_app import (
     category_table_rows,
     category_table_success_message,
     confirm_historical_excel_import_from_preview,
+    confirm_statement_pdf_import_from_preview,
     completed_historical_import_batch_fallback,
     completed_statement_pdf_import_batch_fallback,
     edited_category_payload,
@@ -54,6 +55,7 @@ from lxcell.ui.streamlit_app import (
     statement_pdf_candidate_rows,
     statement_pdf_direction_rows,
     statement_pdf_issue_rows,
+    statement_pdf_import_success_message,
     statement_pdf_preview_can_render,
     statement_pdf_protected_candidate_count,
     source_totals_by_category_minor,
@@ -628,6 +630,80 @@ def test_statement_pdf_summary_rows_format_direction_and_issues():
             "incidencia": "Row has no outgoing or incoming amount.",
         }
     ]
+
+
+def test_confirm_statement_pdf_import_from_preview_writes_import(session_factory):
+    with session_scope(session_factory) as session:
+        service = AccountingService(AccountingRepository(session))
+        profile = service.create_user_profile(display_name="Sample User")
+        session.flush()
+        account = service.create_account(
+            user_profile_id=profile.id,
+            name="Primary account",
+            account_type=AccountType.CHECKING,
+        )
+        session.flush()
+
+    preview = PdfStatementPreview(
+        source_file_name="sample.pdf",
+        source_file_hash="abc123",
+        page_count=1,
+        candidates=(
+            PdfStatementTransactionCandidate(
+                row_number_source=1,
+                page_number=1,
+                transaction_date=date(2026, 2, 1),
+                posted_date=date(2026, 2, 1),
+                description_raw="Merchant A",
+                description_clean="Merchant A",
+                amount_minor=1234,
+                direction=Direction.OUTFLOW,
+                amount_raw="12,34",
+                currency="EUR",
+                balance_raw="987,66",
+                balance_minor=98766,
+                payload_raw={},
+                content_hash="abc",
+            ),
+        ),
+        issues=(),
+    )
+
+    result = confirm_statement_pdf_import_from_preview(
+        session_factory,
+        user_profile_id=profile.id,
+        account_id=account.id,
+        source_system=ImportSourceSystem.BANK_PDF,
+        preview=preview,
+        confirmed_by="Sample User",
+        user_confirmed=True,
+    )
+
+    with session_scope(session_factory) as session:
+        transaction = session.scalar(select(Transaction))
+
+    assert result.transaction_count == 1
+    assert transaction.description_clean == "Merchant A"
+
+
+def test_statement_pdf_import_success_message_includes_skipped_rows():
+    message = statement_pdf_import_success_message(
+        StatementPdfImportResult(
+            import_batch_id=1,
+            account_id=2,
+            transaction_count=3,
+            ignored_protected_count=4,
+            matched_existing_count=5,
+            marked_duplicate_count=6,
+        )
+    )
+
+    assert message == (
+        "Extracto guardado: 3 transacción(es) creada(s), "
+        "4 protegida(s) ignorada(s), "
+        "5 duplicada(s) existente(s), "
+        "6 duplicada(s) en el archivo"
+    )
 
 
 def test_stored_statement_pdf_preview_matches_rejects_stale_preview():

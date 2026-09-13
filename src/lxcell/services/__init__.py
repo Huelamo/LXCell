@@ -13,6 +13,10 @@ from lxcell.services.reporting_service import (
     CategoryTotal,
     ReportingService,
 )
+from lxcell.services.statement_pdf_import_service import (
+    StatementPdfImportResult,
+    StatementPdfImportService,
+)
 
 __all__ = [
     "HISTORICAL_EXCEL_ACCOUNT_NAME",
@@ -24,4 +28,6 @@ __all__ = [
     "HistoricalExcelImportResult",
     "HistoricalExcelImportService",
     "ReportingService",
+    "StatementPdfImportResult",
+    "StatementPdfImportService",
 ]

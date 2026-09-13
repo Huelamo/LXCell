@@ -13,6 +13,7 @@ from lxcell.enums.core_enums import (
     ClassificationDecisionSource,
     ClassificationDecisionStatus,
     Direction,
+    ImportAction,
     ImportSourceSystem,
     ImportStatus,
     TransactionReviewStatus,
@@ -281,6 +282,124 @@ def test_repository_finds_completed_import_batch_by_hash(session_factory):
 
     assert found_batch.id == completed_batch.id
     assert pending_batch is None
+
+
+def test_repository_finds_completed_import_batch_by_hash_for_account(session_factory):
+    with session_scope(session_factory) as session:
+        repository = AccountingRepository(session)
+        user_profile = repository.add_user_profile(display_name="Sample User")
+        session.flush()
+        account_a = repository.add_account(
+            user_profile_id=user_profile.id,
+            name="Account A",
+            account_type=AccountType.CHECKING,
+        )
+        account_b = repository.add_account(
+            user_profile_id=user_profile.id,
+            name="Account B",
+            account_type=AccountType.CHECKING,
+        )
+        session.flush()
+        matching_batch = repository.add_import_batch(
+            user_profile_id=user_profile.id,
+            account_id=account_a.id,
+            source_system=ImportSourceSystem.BANK_PDF,
+            source_file_hash="abc123",
+            import_status=ImportStatus.COMPLETED,
+        )
+        repository.add_import_batch(
+            user_profile_id=user_profile.id,
+            account_id=account_b.id,
+            source_system=ImportSourceSystem.BANK_PDF,
+            source_file_hash="abc123",
+            import_status=ImportStatus.COMPLETED,
+        )
+        repository.add_import_batch(
+            user_profile_id=user_profile.id,
+            account_id=account_a.id,
+            source_system=ImportSourceSystem.BANK_PDF,
+            source_file_hash="pending123",
+            import_status=ImportStatus.PENDING,
+        )
+
+    with session_scope(session_factory) as session:
+        repository = AccountingRepository(session)
+        found_batch = repository.get_completed_import_batch_by_file_hash_for_account(
+            user_profile_id=user_profile.id,
+            account_id=account_a.id,
+            source_system=ImportSourceSystem.BANK_PDF,
+            source_file_hash="abc123",
+        )
+        pending_batch = repository.get_completed_import_batch_by_file_hash_for_account(
+            user_profile_id=user_profile.id,
+            account_id=account_a.id,
+            source_system=ImportSourceSystem.BANK_PDF,
+            source_file_hash="pending123",
+        )
+
+    assert found_batch.id == matching_batch.id
+    assert pending_batch is None
+
+
+def test_repository_finds_imported_source_by_hash_for_account(session_factory):
+    with session_scope(session_factory) as session:
+        repository = AccountingRepository(session)
+        user_profile = repository.add_user_profile(display_name="Sample User")
+        session.flush()
+        account_a = repository.add_account(
+            user_profile_id=user_profile.id,
+            name="Account A",
+            account_type=AccountType.CHECKING,
+        )
+        account_b = repository.add_account(
+            user_profile_id=user_profile.id,
+            name="Account B",
+            account_type=AccountType.CHECKING,
+        )
+        session.flush()
+        matching_batch = repository.add_import_batch(
+            user_profile_id=user_profile.id,
+            account_id=account_a.id,
+            source_system=ImportSourceSystem.BANK_PDF,
+            source_file_hash="file-a",
+            import_status=ImportStatus.COMPLETED,
+        )
+        other_batch = repository.add_import_batch(
+            user_profile_id=user_profile.id,
+            account_id=account_b.id,
+            source_system=ImportSourceSystem.BANK_PDF,
+            source_file_hash="file-b",
+            import_status=ImportStatus.COMPLETED,
+        )
+        session.flush()
+        matching_source = repository.add_imported_transaction_source(
+            import_batch_id=matching_batch.id,
+            import_action=ImportAction.CREATED_TRANSACTION,
+            normalized_hash="row123",
+        )
+        repository.add_imported_transaction_source(
+            import_batch_id=other_batch.id,
+            import_action=ImportAction.CREATED_TRANSACTION,
+            normalized_hash="row123",
+        )
+
+    with session_scope(session_factory) as session:
+        repository = AccountingRepository(session)
+        found_source = repository.get_imported_source_by_normalized_hash_for_account(
+            user_profile_id=user_profile.id,
+            account_id=account_a.id,
+            source_system=ImportSourceSystem.BANK_PDF,
+            normalized_hash="row123",
+        )
+        missing_source = repository.get_imported_source_by_normalized_hash_for_account(
+            user_profile_id=user_profile.id,
+            account_id=account_a.id,
+            source_system=ImportSourceSystem.CARD_PDF,
+            normalized_hash="row123",
+        )
+
+    assert found_source.id == matching_source.id
+    assert missing_source is None
 
 
 def test_repository_creates_file_scoped_category_mapping_and_suggestions(
