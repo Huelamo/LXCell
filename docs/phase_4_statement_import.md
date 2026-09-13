@@ -1,17 +1,18 @@
 # Phase 4 Statement Import Design
 
-Last updated: 2026-09-12
+Last updated: 2026-09-13
 
 This document records the initial design for importing user-provided bank and
-card statements into LXCell. It is intentionally source-format agnostic until
-the first anonymized fixture is available.
+card statements into LXCell. The first supported source format is the Spanish
+PDF statement layout represented by anonymized parser tests.
 
 No real personal finance details should be added here. Use generic source names
 such as `Bank A`, `Card A`, `Merchant A`, and `Sample User`.
 
 ## Review Status
 
-Status: accepted for the first Phase 4 design block.
+Status: first confirmed PDF import, conservative deterministic classification,
+and post-import classification review implemented.
 
 Accepted:
 
@@ -28,17 +29,63 @@ Accepted:
 - Every created or suggested classification should be recorded through
   `ClassificationDecision`.
 
+Implemented:
+
+- `PdfStatementDryRunImporter` parses the first Spanish PDF statement layout
+  into in-memory candidates without database writes.
+- The parser reads repeated statement table headers, operation date, value date,
+  description, outgoing amount, incoming amount, and balance.
+- The local Streamlit `Importar` tab can preview statement PDFs after the user
+  selects an active account and source type.
+- The preview shows parsed movement count, page count, parse issues, direction
+  totals, first candidate rows, and completed-import file-hash warnings scoped
+  to the selected account.
+- The preview marks rows dated inside the profile's protected historical period
+  when `transactions_locked_until` is configured.
+- `StatementPdfImportService` can confirm a reviewed PDF preview into the
+  database, creating account-scoped import audit rows and pending transactions
+  only for rows that should enter the ledger.
+- The local Streamlit `Importar` tab exposes the confirmed PDF save action after
+  preview, with normal confirmation plus an optional protected-period override
+  that requires typing an exact confirmation text.
+- Confirmed PDF imports run active deterministic classification rules against
+  each created transaction. High-confidence non-conflicting rules can assign
+  category/type/payment method while keeping the row pending review; useful
+  lower-confidence rules are recorded as suggestions only.
+- Confirmed PDF imports infer obvious payment methods from statement text,
+  including card markers and supported peer-to-peer payment app markers.
+- The local Streamlit `Transacciones` tab includes a post-import review queue
+  for pending imported transactions. The user can accept or correct category,
+  transaction type, and payment method one transaction at a time, and each
+  review creates an accepted manual classification decision.
+- The post-import review form preselects `card` when the transaction text
+  indicates a card payment and can explicitly create a reusable deterministic
+  rule from the reviewed transaction for future imports.
+- Existing deterministic classification rules can be edited, deactivated, and
+  reactivated from the local configuration UI.
+- Rules that accidentally contain sensitive imported description text can be
+  hard-deleted from the local configuration UI after typing an explicit
+  confirmation phrase; linked classification decisions are preserved without
+  the deleted rule reference.
+- Shared-expense reimbursement suggestions can link incoming statement
+  transactions to pending shared-expense allocations after user review.
+- Tests generate synthetic anonymized PDFs at runtime; no real statement file is
+  committed.
+
 Open:
 
-- Which concrete statement export format should be implemented first.
-- Whether the first importer should support CSV only or CSV plus XLSX.
+- Whether later importers should support CSV, XLSX, or other account-specific
+  exports.
 - Whether the first UI should allow user-defined column mappings or begin with a
-  source-specific parser for the first export format.
+  source-specific parser for each export format.
 - Whether pending imported transactions should be visually excluded from some
   dashboards until reviewed, even though current reporting includes
   `pending_review` transactions unless they are ignored.
 - When to introduce merchant normalization as a separate table.
 - When to introduce transfer matching between accounts.
+- Whether protected rows ignored in a completed statement import should have a
+  dedicated reimport/override workflow later, or remain part of the deferred
+  replace/reimport design.
 
 ## Product Goal
 
@@ -94,8 +141,10 @@ the selected profile before previewing or confirming.
 Rules:
 
 - `ImportBatch.account_id` is required for bank and card statement imports.
-- Use `source_system = bank_csv` for bank/current-account statement exports.
-- Use `source_system = card_csv` for card statement exports.
+- Use `source_system = bank_pdf` for bank/current-account PDF statement exports.
+- Use `source_system = card_pdf` for card PDF statement exports.
+- Use `source_system = bank_csv` or `card_csv` only for future CSV statement
+  exports.
 - Use `Transaction.source_type = bank_import` for both bank and card file
   imports unless a future enum split becomes useful.
 - Imported transactions inherit `account_id`, `user_profile_id`, and account
@@ -115,11 +164,10 @@ The first workflow should follow this shape:
    database.
 4. LXCell checks whether a completed import already exists for the same profile,
    account, source system, and file hash.
-5. LXCell checks each candidate normalized hash against prior imported sources
-   for the same profile and account.
-6. LXCell runs deterministic classification suggestions.
-7. UI shows preview metrics, blocking errors, duplicate candidates, category
-   suggestions, and rows that will remain uncategorized.
+5. LXCell marks candidates dated on or before the selected profile's
+   `transactions_locked_until` date as protected.
+6. UI shows preview metrics, blocking errors, protected rows, and rows that
+   will remain uncategorized.
 
 Preview should be repeatable. Re-previewing the same file should not create
 database rows.
@@ -135,12 +183,19 @@ Rules:
 - Files with blocking parse errors cannot be imported.
 - A previously completed import with the same profile, account, source system,
   and file hash blocks confirmation.
+- Confirmation checks each candidate normalized hash against prior imported
+  sources for the same profile and account.
 - Exact duplicate source rows should not create new transactions by default.
 - Rows ignored as exact duplicates should still be traceable through
   `ImportedTransactionSource.import_action`.
-- Non-duplicate rows create `Transaction` records.
+- Rows dated inside the selected profile's protected historical period should
+  not be created by default. A confirmed workflow must either skip those rows
+  with traceability or ask for explicit additional approval before writing them.
+  The local UI requires typing an exact confirmation text for that override.
+- Non-duplicate, non-protected rows create `Transaction` records.
 - Confirmed import can use `completed_with_warnings` when rows were skipped as
-  duplicates or left uncategorized.
+  duplicates or protected-period rows. Uncategorized pending rows are expected
+  in this first slice.
 - Rollback should soft-delete transactions created by the import and mark the
   batch as `rolled_back`; audit rows should remain.
 
@@ -241,6 +296,7 @@ Row-level normalized hash should include:
 - direction;
 - currency;
 - normalized description;
+- source balance after the movement, when present;
 - source-provided record id when available.
 
 Rules:
@@ -296,17 +352,25 @@ The first implementation PR should be blocked by tests for:
 - leaving uncertain rows uncategorized with pending review;
 - preserving existing classification decisions when user corrections supersede
   them;
+- confirming or correcting pending imported classifications through the review
+  queue;
+- learning an explicit deterministic rule from a reviewed imported transaction;
+- re-applying a newly learned deterministic rule to other pending imported
+  transactions;
 - using synthetic/anonymized fixtures only.
 
 ## First Implementation Slice
 
 Recommended first slice:
 
-1. Add a source-specific parser for one anonymized CSV fixture.
-2. Add a read-only preview service.
-3. Expose preview in Streamlit.
+1. Add a source-specific parser for one anonymized PDF fixture. Done.
+2. Add a read-only preview service. Partially done at importer level.
+3. Expose preview in Streamlit. Done.
 4. Add duplicate checks against existing import batches and source rows.
-5. Defer confirmed write until preview behavior is trusted.
+   Done for file-hash and exact normalized row-hash checks in confirmed imports.
+5. Add confirmed database writes from reviewed previews. Done.
+6. Add deterministic classification suggestions. Done for active
+   `ClassificationRule` rows; repeated-history learning remains future work.
 
 This mirrors the historical Excel approach and keeps the first bank-statement
 PR small enough to review.
