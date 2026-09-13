@@ -41,6 +41,7 @@ HISTORICAL_EXCEL_PREVIEW_VERSION = 5
 HISTORICAL_EXCEL_ACCOUNT_NAME = "Excel histórico"
 STATEMENT_PDF_PREVIEW_KEY = "lxcell_statement_pdf_preview"
 STATEMENT_PDF_PREVIEW_VERSION = 1
+STATEMENT_PDF_PROTECTED_IMPORT_CONFIRMATION_TEXT = "IMPORTAR PERIODO PROTEGIDO"
 
 
 def run() -> None:
@@ -811,10 +812,19 @@ def render_statement_pdf_import_confirmation(
             key="statement_pdf_confirmed_by",
         )
         import_protected = False
+        protected_confirmation_text = ""
         if protected_count:
-            import_protected = st.checkbox(
-                "Confirmo que quiero importar también movimientos del periodo protegido",
-                key="statement_pdf_locked_period_override",
+            st.warning(
+                "Importar movimientos del periodo protegido puede duplicar o modificar "
+                "historial ya revisado."
+            )
+            st.caption(
+                "Para importarlos también, escribe exactamente: "
+                f"{STATEMENT_PDF_PROTECTED_IMPORT_CONFIRMATION_TEXT}"
+            )
+            protected_confirmation_text = st.text_input(
+                "Texto de confirmación para periodo protegido",
+                key="statement_pdf_locked_period_override_text",
             )
         user_confirmed = st.checkbox(
             "Confirmo que quiero guardar este extracto en la base de datos",
@@ -824,6 +834,18 @@ def render_statement_pdf_import_confirmation(
 
     if not submitted:
         return
+    if (
+        protected_count
+        and protected_confirmation_text.strip()
+        and not statement_pdf_protected_import_confirmation_matches(
+            protected_confirmation_text
+        )
+    ):
+        st.warning("El texto de confirmación del periodo protegido no coincide.")
+        return
+    import_protected = statement_pdf_protected_import_confirmation_matches(
+        protected_confirmation_text
+    )
     try:
         result = confirm_statement_pdf_import_from_preview(
             session_factory,
@@ -882,6 +904,10 @@ def statement_pdf_import_success_message(result) -> str:
     if result.marked_duplicate_count:
         parts.append(f"{result.marked_duplicate_count} duplicada(s) en el archivo")
     return "Extracto guardado: " + ", ".join(parts)
+
+
+def statement_pdf_protected_import_confirmation_matches(value: str) -> bool:
+    return value.strip() == STATEMENT_PDF_PROTECTED_IMPORT_CONFIRMATION_TEXT
 
 
 def completed_statement_pdf_import_batch(

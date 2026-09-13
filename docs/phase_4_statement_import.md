@@ -45,7 +45,8 @@ Implemented:
   database, creating account-scoped import audit rows and pending transactions
   only for rows that should enter the ledger.
 - The local Streamlit `Importar` tab exposes the confirmed PDF save action after
-  preview, with normal confirmation plus an optional protected-period override.
+  preview, with normal confirmation plus an optional protected-period override
+  that requires typing an exact confirmation text.
 - Tests generate synthetic anonymized PDFs at runtime; no real statement file is
   committed.
 
@@ -168,6 +169,7 @@ Rules:
 - Rows dated inside the selected profile's protected historical period should
   not be created by default. A confirmed workflow must either skip those rows
   with traceability or ask for explicit additional approval before writing them.
+  The local UI requires typing an exact confirmation text for that override.
 - Non-duplicate, non-protected rows create `Transaction` records.
 - Confirmed import can use `completed_with_warnings` when rows were skipped as
   duplicates or protected-period rows. Uncategorized pending rows are expected

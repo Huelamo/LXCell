@@ -28,6 +28,7 @@ from lxcell.repositories import AccountingRepository
 from lxcell.services import AccountingService, StatementPdfImportResult
 from lxcell.ui.streamlit_app import (
     HISTORICAL_EXCEL_PREVIEW_VERSION,
+    STATEMENT_PDF_PROTECTED_IMPORT_CONFIRMATION_TEXT,
     STATEMENT_PDF_PREVIEW_VERSION,
     account_label_for_transaction_table,
     apply_historical_category_mapping_to_plan,
@@ -57,6 +58,7 @@ from lxcell.ui.streamlit_app import (
     statement_pdf_issue_rows,
     statement_pdf_import_success_message,
     statement_pdf_preview_can_render,
+    statement_pdf_protected_import_confirmation_matches,
     statement_pdf_protected_candidate_count,
     source_totals_by_category_minor,
     source_totals_by_month_minor,
@@ -703,6 +705,22 @@ def test_statement_pdf_import_success_message_includes_skipped_rows():
         "4 protegida(s) ignorada(s), "
         "5 duplicada(s) existente(s), "
         "6 duplicada(s) en el archivo"
+    )
+
+
+def test_statement_pdf_protected_import_confirmation_requires_exact_text():
+    assert statement_pdf_protected_import_confirmation_matches(
+        STATEMENT_PDF_PROTECTED_IMPORT_CONFIRMATION_TEXT
+    )
+    assert statement_pdf_protected_import_confirmation_matches(
+        f"  {STATEMENT_PDF_PROTECTED_IMPORT_CONFIRMATION_TEXT}  "
+    )
+    assert not statement_pdf_protected_import_confirmation_matches("")
+    assert not statement_pdf_protected_import_confirmation_matches(
+        "IMPORTAR PROTEGIDAS"
+    )
+    assert not statement_pdf_protected_import_confirmation_matches(
+        STATEMENT_PDF_PROTECTED_IMPORT_CONFIRMATION_TEXT.lower()
     )
 
 
