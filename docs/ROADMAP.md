@@ -93,9 +93,22 @@ Current design direction:
   categories, leaving uncertain rows pending review.
 - Respect each profile's historical transaction lock so statement imports that
   overlap already reviewed history are not written silently.
-- First PDF parser, Streamlit preview, protected-period markers, and confirmed
-  PDF writes are implemented. Deterministic classification suggestions remain
-  follow-up work.
+- First PDF parser, Streamlit preview, protected-period markers, confirmed PDF
+  writes, conservative deterministic rule classification, and a post-import
+  classification review queue with explicit rule learning are implemented.
+- Initial shared-expense tracking is implemented with counterparties and 50/50
+  allocation markers on existing transactions.
+- Reporting services can now calculate cashflow, category totals, and budget
+  actuals using either gross transaction amounts or personal effective amounts
+  from shared-expense allocations. The local UI exposes gross versus personal
+  cashflow and category reports.
+- Reviewable reimbursement matching is implemented for shared expenses using
+  conservative alias, amount, and date checks. Multi-expense splitting,
+  automatic confirmation, and richer reimbursement dashboards remain follow-up
+  work.
+- Basic deterministic rule learning and management is implemented in the local
+  UI: rules can be created from reviewed imports, edited, deactivated, and
+  reactivated.
 
 Detailed review log: `docs/phase_4_statement_import.md`.
 
@@ -118,7 +131,8 @@ Phase 4 dependency:
 
 - The first statement importer will include a small deterministic classification
   layer so imported transactions can receive high-confidence category
-  suggestions. Broader rule learning, management, and automation remain Phase 5.
+  suggestions. Basic rule learning and editing now exists; broader repeated
+  history mining, rule diagnostics, and automation remain Phase 5.
 
 ## Phase 6 - User Interface
 

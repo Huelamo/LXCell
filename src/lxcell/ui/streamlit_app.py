@@ -16,22 +16,42 @@ import streamlit as st
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from lxcell.db.models import Category, CategoryMapping, ImportBatch, Transaction
+from lxcell.db.models import (
+    Category,
+    CategoryMapping,
+    ClassificationDecision,
+    ClassificationRule,
+    Counterparty,
+    ImportBatch,
+    ReimbursementMatch,
+    Transaction,
+)
 from lxcell.db.runtime import DEFAULT_DATABASE_PATH, create_local_session_factory
 from lxcell.db.session import session_scope
 from lxcell.enums.core_enums import (
     AccountType,
     CategoryType,
+    ClassificationDecisionStatus,
+    ClassificationMatchField,
+    ClassificationRuleType,
     Direction,
     ImportSourceSystem,
     ImportStatus,
     OwnershipType,
     PaymentMethod,
+    ReimbursementMatchStatus,
+    TransactionReviewStatus,
     TransactionType,
 )
 from lxcell.importers import HistoricalExcelPreview, PdfStatementPreview
 from lxcell.repositories import AccountingRepository
-from lxcell.services import AccountingService
+from lxcell.services import (
+    AccountingService,
+    DeterministicClassificationService,
+    ReportAmountBasis,
+    ReportingService,
+    normalize_classification_text,
+)
 from lxcell.services.accounting_service import protected_transaction_dates
 from lxcell.services.historical_excel_import_service import HistoricalExcelImportService
 from lxcell.services.statement_pdf_import_service import StatementPdfImportService
@@ -43,6 +63,7 @@ HISTORICAL_EXCEL_ACCOUNT_NAME = "Excel histórico"
 STATEMENT_PDF_PREVIEW_KEY = "lxcell_statement_pdf_preview"
 STATEMENT_PDF_PREVIEW_VERSION = 1
 STATEMENT_PDF_PROTECTED_IMPORT_CONFIRMATION_TEXT = "IMPORTAR PERIODO PROTEGIDO"
+CLASSIFICATION_RULE_HARD_DELETE_CONFIRMATION_TEXT = "BORRAR REGLAS"
 
 
 def run() -> None:
@@ -57,8 +78,15 @@ def run() -> None:
     profiles = load_profiles(session_factory)
     selected_profile_id = profile_selector(profiles)
 
-    setup_tab, transaction_tab, review_tab, categories_tab, import_tab = st.tabs(
-        ["Configuración", "Registrar", "Transacciones", "Categorías", "Importar"]
+    setup_tab, transaction_tab, review_tab, reports_tab, categories_tab, import_tab = st.tabs(
+        [
+            "Configuración",
+            "Registrar",
+            "Transacciones",
+            "Informes",
+            "Categorías",
+            "Importar",
+        ]
     )
 
     with setup_tab:
@@ -67,6 +95,8 @@ def run() -> None:
         render_transaction_form(session_factory, selected_profile_id)
     with review_tab:
         render_transactions(session_factory, selected_profile_id)
+    with reports_tab:
+        render_reports(session_factory, selected_profile_id)
     with categories_tab:
         render_categories(session_factory, selected_profile_id)
     with import_tab:
@@ -125,69 +155,245 @@ def render_setup(session_factory, selected_profile_id: int | None) -> None:
             flash_success("setup", "Protección histórica guardada.")
             st.rerun()
 
-    account_column, category_column = st.columns(2)
-    with account_column:
-        st.subheader("Cuenta")
-        with st.form("create_account", clear_on_submit=True):
-            account_name = st.text_input("Nombre de la cuenta")
-            account_type = st.selectbox("Tipo", enum_values(AccountType))
-            ownership_type = st.selectbox("Titularidad", enum_values(OwnershipType))
-            currency = st.text_input("Moneda de la cuenta", value="EUR", max_chars=3)
-            institution_name = st.text_input("Entidad")
-            submitted = st.form_submit_button("Crear cuenta")
-            if submitted:
-                try:
-                    with session_scope(session_factory) as session:
-                        service = AccountingService(AccountingRepository(session))
-                        account = service.create_account(
-                            user_profile_id=selected_profile_id,
-                            name=account_name,
-                            account_type=AccountType(account_type),
-                            institution_name=institution_name or None,
-                            currency=currency.upper(),
-                            ownership_type=OwnershipType(ownership_type),
-                        )
-                        session.flush()
-                        flash_success("setup", f"Cuenta creada: {account.name}")
-                    st.rerun()
-                except IntegrityError as exc:
-                    st.warning(friendly_integrity_error_message(exc))
-
-    with category_column:
-        st.subheader("Categoría")
-        show_category_advanced = st.checkbox(
-            "Opciones avanzadas",
-            key="create_category_advanced",
-        )
-        with st.form("create_category", clear_on_submit=True):
-            category_name = st.text_input("Nombre de la categoría")
-            category_type = st.selectbox("Tipo de categoría", enum_values(CategoryType))
-            canonical_key = ""
-            if show_category_advanced:
-                canonical_key = st.text_input("Clave canónica")
-            display_order = st.number_input("Orden", min_value=0, step=1)
-            submitted = st.form_submit_button("Crear categoría")
-            if submitted:
-                try:
-                    resolved_canonical_key = (
-                        canonical_key.strip()
-                        if canonical_key.strip()
-                        else canonical_key_from_name(category_name)
+    st.subheader("Cuenta")
+    with st.form("create_account", clear_on_submit=True):
+        account_name = st.text_input("Nombre de la cuenta")
+        account_type = st.selectbox("Tipo", enum_values(AccountType))
+        ownership_type = st.selectbox("Titularidad", enum_values(OwnershipType))
+        currency = st.text_input("Moneda de la cuenta", value="EUR", max_chars=3)
+        institution_name = st.text_input("Entidad")
+        submitted = st.form_submit_button("Crear cuenta")
+        if submitted:
+            try:
+                with session_scope(session_factory) as session:
+                    service = AccountingService(AccountingRepository(session))
+                    account = service.create_account(
+                        user_profile_id=selected_profile_id,
+                        name=account_name,
+                        account_type=AccountType(account_type),
+                        institution_name=institution_name or None,
+                        currency=currency.upper(),
+                        ownership_type=OwnershipType(ownership_type),
                     )
-                    with session_scope(session_factory) as session:
-                        service = AccountingService(AccountingRepository(session))
-                        category = service.create_category(
-                            user_profile_id=selected_profile_id,
-                            name=category_name,
-                            category_type=CategoryType(category_type),
-                            canonical_key=resolved_canonical_key,
-                            display_order=int(display_order),
-                        )
-                        session.flush()
-                        flash_success("setup", f"Categoría creada: {category.name}")
-                    st.rerun()
-                except IntegrityError as exc:
-                    st.warning(friendly_integrity_error_message(exc))
+                    session.flush()
+                    flash_success("setup", f"Cuenta creada: {account.name}")
+                st.rerun()
+            except IntegrityError as exc:
+                st.warning(friendly_integrity_error_message(exc))
+
+    st.subheader("Contrapartes")
+    counterparties = load_counterparties(session_factory, selected_profile_id)
+    if counterparties:
+        st.dataframe(
+            pd.DataFrame(counterparty_table_rows(counterparties)),
+            use_container_width=True,
+            hide_index=True,
+        )
+    with st.form("create_counterparty", clear_on_submit=True):
+        counterparty_name = st.text_input("Nombre de la contraparte")
+        aliases_raw = st.text_area("Alias en conceptos", height=80)
+        submitted = st.form_submit_button("Crear contraparte")
+        if submitted:
+            try:
+                with session_scope(session_factory) as session:
+                    service = AccountingService(AccountingRepository(session))
+                    counterparty = service.create_counterparty(
+                        user_profile_id=selected_profile_id,
+                        display_name=counterparty_name,
+                        aliases_raw=aliases_raw,
+                    )
+                    session.flush()
+                    flash_success(
+                        "setup",
+                        f"Contraparte creada: {counterparty.display_name}",
+                    )
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
+            except IntegrityError as exc:
+                st.warning(friendly_integrity_error_message(exc))
+
+    render_classification_rule_setup(
+        session_factory,
+        selected_profile_id=selected_profile_id,
+    )
+
+
+def render_classification_rule_setup(
+    session_factory,
+    *,
+    selected_profile_id: int,
+) -> None:
+    st.subheader("Reglas de clasificación")
+    rules = load_classification_rules(
+        session_factory,
+        selected_profile_id,
+        include_inactive=True,
+    )
+    categories = load_categories(
+        session_factory,
+        selected_profile_id,
+        include_inactive=True,
+    )
+    category_labels = {
+        category.id: category_label_for_transaction_table(category)
+        for category in categories
+    }
+    category_ids_by_label = {"Sin categoría": None} | {
+        label: category_id for category_id, label in category_labels.items()
+    }
+
+    if rules:
+        edited_table = st.data_editor(
+            pd.DataFrame(
+                classification_rule_editor_rows(
+                    rules,
+                    category_labels=category_labels,
+                )
+            ),
+            use_container_width=True,
+            hide_index=True,
+            num_rows="fixed",
+            disabled=["id"],
+            column_config=classification_rule_editor_column_config(
+                category_options=list(category_ids_by_label),
+            ),
+            key="classification_rules_editor",
+        )
+        hard_delete_requested = any(
+            row.get("acción") == "Borrar definitivamente"
+            for row in edited_table.to_dict("records")
+        )
+        hard_delete_confirmation = ""
+        if hard_delete_requested:
+            hard_delete_confirmation = st.text_input(
+                "Para borrar reglas definitivamente, escribe BORRAR REGLAS",
+                key="classification_rules_hard_delete_confirmation",
+            )
+        if st.button("Guardar reglas", type="primary"):
+            if (
+                hard_delete_requested
+                and hard_delete_confirmation
+                != CLASSIFICATION_RULE_HARD_DELETE_CONFIRMATION_TEXT
+            ):
+                st.warning(
+                    "Escribe BORRAR REGLAS para borrar definitivamente las reglas marcadas."
+                )
+                return
+            try:
+                (
+                    updated_count,
+                    hard_deleted_count,
+                    unlinked_decision_count,
+                ) = apply_classification_rule_table_changes(
+                    session_factory,
+                    user_profile_id=selected_profile_id,
+                    original_rules=rules,
+                    edited_rows=edited_table.to_dict("records"),
+                    category_ids_by_label=category_ids_by_label,
+                )
+            except IntegrityError as exc:
+                st.warning(friendly_integrity_error_message(exc))
+                return
+            except ValueError as exc:
+                st.error(str(exc))
+                return
+
+            if updated_count == 0 and hard_deleted_count == 0:
+                st.info("No hay cambios que guardar.")
+                return
+            flash_success(
+                "setup",
+                classification_rule_table_success_message(
+                    updated_count=updated_count,
+                    hard_deleted_count=hard_deleted_count,
+                    unlinked_decision_count=unlinked_decision_count,
+                ),
+            )
+            st.rerun()
+    else:
+        st.info("Todavía no hay reglas de clasificación.")
+
+    active_categories = [category for category in categories if category.is_active]
+    if not active_categories:
+        st.info("Crea una categoría activa para añadir reglas de clasificación.")
+        return
+
+    active_category_labels = {
+        category.id: category.name for category in active_categories
+    }
+    with st.form("create_classification_rule", clear_on_submit=True):
+        name = st.text_input("Nombre de la regla")
+        pattern = st.text_input("Texto o patrón")
+        category_id = st.selectbox(
+            "Categoría",
+            options=[category.id for category in active_categories],
+            format_func=active_category_labels.get,
+        )
+        rule_type = st.selectbox(
+            "Tipo de regla",
+            options=[
+                ClassificationRuleType.DESCRIPTION_CONTAINS.value,
+                ClassificationRuleType.DESCRIPTION_REGEX.value,
+            ],
+        )
+        match_field = st.selectbox(
+            "Campo",
+            options=[
+                ClassificationMatchField.DESCRIPTION_CLEAN.value,
+                ClassificationMatchField.DESCRIPTION_RAW.value,
+            ],
+        )
+        direction = st.selectbox("Dirección", [""] + enum_values(Direction))
+        transaction_type = st.selectbox(
+            "Tipo de transacción",
+            [""] + enum_values(TransactionType),
+        )
+        payment_method = st.selectbox(
+            "Método de pago",
+            [""] + enum_values(PaymentMethod),
+        )
+        min_amount_text = st.text_input("Importe mínimo", placeholder="opcional")
+        max_amount_text = st.text_input("Importe máximo", placeholder="opcional")
+        priority = st.number_input("Prioridad", min_value=0, value=100, step=1)
+        confidence_percent = st.slider("Confianza", min_value=70, max_value=100, value=95)
+        auto_apply = st.checkbox("Autoaplicar si no hay conflicto", value=True)
+        submitted = st.form_submit_button("Crear regla")
+        if submitted:
+            try:
+                create_classification_rule_from_ui(
+                    session_factory,
+                    user_profile_id=selected_profile_id,
+                    name=name,
+                    pattern=pattern,
+                    category_id=category_id,
+                    rule_type=ClassificationRuleType(rule_type),
+                    match_field=ClassificationMatchField(match_field),
+                    direction=Direction(direction) if direction else None,
+                    transaction_type=(
+                        TransactionType(transaction_type)
+                        if transaction_type
+                        else None
+                    ),
+                    payment_method=(
+                        PaymentMethod(payment_method)
+                        if payment_method
+                        else None
+                    ),
+                    amount_min_minor=parse_optional_amount_minor(min_amount_text),
+                    amount_max_minor=parse_optional_amount_minor(max_amount_text),
+                    priority=int(priority),
+                    confidence=(
+                        Decimal(confidence_percent) / Decimal("100")
+                    ).quantize(Decimal("0.0001")),
+                    auto_apply=auto_apply,
+                )
+                flash_success("setup", "Regla de clasificación creada.")
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
+            except IntegrityError as exc:
+                st.warning(friendly_integrity_error_message(exc))
 
 
 def render_transaction_form(session_factory, selected_profile_id: int | None) -> None:
@@ -316,24 +522,52 @@ def render_transactions(session_factory, selected_profile_id: int | None) -> Non
     with session_scope(session_factory) as session:
         repository = AccountingRepository(session)
         transactions = repository.list_transactions(user_profile_id=selected_profile_id)
+        shared_transaction_ids = {
+            allocation.transaction_id
+            for allocation in repository.list_shared_expense_allocations_for_profile(
+                user_profile_id=selected_profile_id
+            )
+        }
 
-    st.subheader("Últimas transacciones")
     if not transactions:
         st.info("Todavía no hay transacciones.")
         return
 
+    pending_reclassified_count = refresh_pending_classifications_from_ui(
+        session_factory,
+        user_profile_id=selected_profile_id,
+    )
+    if pending_reclassified_count:
+        flash_success(
+            "transactions",
+            "Reglas aplicadas a pendientes: "
+            f"{pending_reclassified_count} actualizada(s).",
+        )
+        st.rerun()
+
+    render_imported_transaction_review_queue(
+        session_factory,
+        selected_profile_id=selected_profile_id,
+        transactions=transactions,
+        categories=categories,
+        account_labels=account_labels,
+        category_labels=category_labels,
+    )
+
+    st.subheader("Últimas transacciones")
     recent_transactions = transactions[-100:][::-1]
     editor_rows = transaction_table_rows(
         recent_transactions,
         account_labels=account_labels,
         category_labels=category_labels,
+        shared_transaction_ids=shared_transaction_ids,
     )
     edited_table = st.data_editor(
         pd.DataFrame(editor_rows),
         use_container_width=True,
         hide_index=True,
         num_rows="fixed",
-        disabled=["id", "estado"],
+        disabled=["id", "compartida", "estado"],
         column_config={
             "id": st.column_config.NumberColumn("id"),
             "fecha": st.column_config.DateColumn("fecha", format="YYYY-MM-DD"),
@@ -364,6 +598,7 @@ def render_transactions(session_factory, selected_profile_id: int | None) -> Non
                 options=[""] + enum_values(PaymentMethod),
                 required=False,
             ),
+            "compartida": st.column_config.TextColumn("compartida"),
             "estado": st.column_config.TextColumn("estado"),
             "eliminar": st.column_config.CheckboxColumn("eliminar"),
         },
@@ -434,6 +669,438 @@ def render_transactions(session_factory, selected_profile_id: int | None) -> Non
         )
         st.rerun()
 
+    render_shared_expense_actions(
+        session_factory,
+        selected_profile_id=selected_profile_id,
+        transactions=recent_transactions,
+        active_shared_transaction_ids=shared_transaction_ids,
+    )
+
+
+def render_imported_transaction_review_queue(
+    session_factory,
+    *,
+    selected_profile_id: int,
+    transactions,
+    categories,
+    account_labels: dict[int, str],
+    category_labels: dict[int | None, str],
+) -> None:
+    st.subheader("Revisión de importaciones")
+    review_transactions = [
+        transaction
+        for transaction in transactions
+        if transaction.review_status == TransactionReviewStatus.PENDING_REVIEW
+        and not transaction.is_deleted
+    ]
+    if not review_transactions:
+        st.info("No hay transacciones importadas pendientes de revisión.")
+        return
+
+    decision_by_transaction_id = load_latest_classification_decisions(
+        session_factory,
+        user_profile_id=selected_profile_id,
+        transaction_ids=[transaction.id for transaction in review_transactions],
+    )
+    st.dataframe(
+        pd.DataFrame(
+            transaction_review_queue_rows(
+                review_transactions,
+                account_labels=account_labels,
+                category_labels=category_labels,
+                decision_by_transaction_id=decision_by_transaction_id,
+            )
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    review_transactions = sorted(
+        review_transactions,
+        key=lambda transaction: (transaction.transaction_date, transaction.id),
+    )
+    selected_transaction_id = st.selectbox(
+        "Transacción pendiente",
+        options=[transaction.id for transaction in review_transactions],
+        format_func={
+            transaction.id: review_transaction_label(transaction)
+            for transaction in review_transactions
+        }.get,
+        key="classification_review_transaction_id",
+    )
+    selected_transaction = next(
+        transaction
+        for transaction in review_transactions
+        if transaction.id == selected_transaction_id
+    )
+    latest_decision = decision_by_transaction_id.get(selected_transaction_id)
+    st.caption(
+        "Sugerencia: "
+        + classification_decision_summary(latest_decision, category_labels)
+    )
+
+    active_categories = [category for category in categories if category.is_active]
+    category_options = [None] + [category.id for category in active_categories]
+    suggested_category_id = (
+        selected_transaction.category_id
+        if selected_transaction.category_id in category_options
+        else latest_decision.category_id
+        if latest_decision is not None
+        and latest_decision.category_id in category_options
+        else None
+    )
+    locked_period_override = render_locked_period_override_for_dates(
+        session_factory,
+        user_profile_id=selected_profile_id,
+        transaction_dates=[selected_transaction.transaction_date],
+        key=f"classification_review_locked_period_override_{selected_transaction_id}",
+    )
+
+    with st.form(f"classification_review_{selected_transaction_id}"):
+        category_id = st.selectbox(
+            "Categoría revisada",
+            options=category_options,
+            index=category_options.index(suggested_category_id),
+            format_func=category_labels.get,
+        )
+        transaction_type = st.selectbox(
+            "Tipo revisado",
+            options=enum_values(TransactionType),
+            index=enum_values(TransactionType).index(
+                selected_transaction.transaction_type.value
+            ),
+        )
+        payment_method_options = [None] + list(PaymentMethod)
+        suggested_payment_method = suggested_payment_method_for_review(
+            selected_transaction
+        )
+        payment_method = st.selectbox(
+            "Método revisado",
+            options=payment_method_options,
+            index=payment_method_options.index(suggested_payment_method),
+            format_func=lambda method: "Sin método"
+            if method is None
+            else method.value,
+        )
+        suggested_rule_pattern = suggested_classification_rule_pattern(
+            selected_transaction
+        )
+        create_and_auto_apply_learned_rule = st.checkbox(
+            "Crear regla y autoaplicarla si no hay conflicto",
+            value=False,
+        )
+        learned_rule_pattern = st.text_input(
+            "Texto para la regla",
+            value=suggested_rule_pattern,
+        )
+        decided_by = st.text_input("Revisado por", value="local_ui")
+        submitted = st.form_submit_button("Confirmar revisión", type="primary")
+        if submitted:
+            try:
+                (
+                    decision_id,
+                    learned_rule_id,
+                    reclassified_count,
+                ) = confirm_imported_transaction_review_from_ui(
+                    session_factory,
+                    user_profile_id=selected_profile_id,
+                    transaction_id=selected_transaction_id,
+                    category_id=category_id,
+                    transaction_type=TransactionType(transaction_type),
+                    payment_method=payment_method,
+                    decided_by=decided_by,
+                    allow_locked_period_override=locked_period_override,
+                    create_learned_rule=create_and_auto_apply_learned_rule,
+                    learned_rule_pattern=learned_rule_pattern,
+                    learned_rule_auto_apply=True,
+                )
+            except ValueError as exc:
+                st.error(str(exc))
+                return
+            message = f"Revisión confirmada: decisión {decision_id}"
+            if learned_rule_id is not None:
+                message += f" · regla {learned_rule_id}"
+            if reclassified_count:
+                message += f" · {reclassified_count} pendiente(s) actualizada(s)"
+            flash_success(
+                "transactions",
+                message,
+            )
+            st.rerun()
+
+
+def render_shared_expense_actions(
+    session_factory,
+    *,
+    selected_profile_id: int,
+    transactions,
+    active_shared_transaction_ids: set[int],
+) -> None:
+    st.subheader("Gastos compartidos")
+    counterparties = load_counterparties(session_factory, selected_profile_id)
+    if not counterparties:
+        st.info("Crea una contraparte en Configuración para marcar gastos compartidos.")
+        return
+
+    candidates = [
+        transaction
+        for transaction in transactions
+        if transaction.direction == Direction.OUTFLOW and transaction.amount_minor > 0
+    ]
+    if not candidates:
+        st.info("No hay gastos recientes que puedan marcarse como compartidos.")
+        return
+
+    selected_transaction_id = st.selectbox(
+        "Transacción",
+        options=[transaction.id for transaction in candidates],
+        format_func={
+            transaction.id: shared_expense_transaction_label(transaction)
+            for transaction in candidates
+        }.get,
+        key="shared_expense_transaction_id",
+    )
+    selected_transaction = next(
+        transaction
+        for transaction in candidates
+        if transaction.id == selected_transaction_id
+    )
+    selected_counterparty_id = st.selectbox(
+        "Contraparte",
+        options=[counterparty.id for counterparty in counterparties],
+        format_func={
+            counterparty.id: counterparty.display_name
+            for counterparty in counterparties
+        }.get,
+        key="shared_expense_counterparty_id",
+    )
+    locked_period_override = render_locked_period_override_for_dates(
+        session_factory,
+        user_profile_id=selected_profile_id,
+        transaction_dates=[selected_transaction.transaction_date],
+        key=f"shared_expense_locked_period_override_{selected_transaction_id}",
+    )
+
+    mark_column, waive_column = st.columns(2)
+    with mark_column:
+        if st.button("Marcar 50/50", type="primary"):
+            try:
+                allocation_id, personal_share_minor, recoverable_share_minor = (
+                    mark_transaction_shared_50_50_from_ui(
+                        session_factory,
+                        user_profile_id=selected_profile_id,
+                        transaction_id=selected_transaction_id,
+                        counterparty_id=selected_counterparty_id,
+                        allow_locked_period_override=locked_period_override,
+                    )
+                )
+            except ValueError as exc:
+                st.error(str(exc))
+                return
+            flash_success(
+                "transactions",
+                "Gasto compartido guardado: "
+                f"{allocation_id} · parte propia {format_amount_minor(personal_share_minor)} "
+                f"· recuperable {format_amount_minor(recoverable_share_minor)}",
+            )
+            st.rerun()
+    with waive_column:
+        disable_waive = selected_transaction_id not in active_shared_transaction_ids
+        if st.button("Quitar marca compartida", disabled=disable_waive):
+            try:
+                waive_shared_expense_from_ui(
+                    session_factory,
+                    user_profile_id=selected_profile_id,
+                    transaction_id=selected_transaction_id,
+                    allow_locked_period_override=locked_period_override,
+                )
+            except ValueError as exc:
+                st.error(str(exc))
+                return
+            flash_success("transactions", "Marca de gasto compartido retirada.")
+            st.rerun()
+
+    render_reimbursement_match_review(session_factory, selected_profile_id)
+
+
+def render_reimbursement_match_review(session_factory, selected_profile_id: int) -> None:
+    st.subheader("Reembolsos")
+    if st.button("Buscar sugerencias de reembolso"):
+        with session_scope(session_factory) as session:
+            service = AccountingService(AccountingRepository(session))
+            result = service.refresh_reimbursement_match_suggestions(
+                user_profile_id=selected_profile_id,
+                decided_by="local_ui",
+            )
+        flash_success(
+            "transactions",
+            "Sugerencias de reembolso actualizadas: "
+            f"{result.created_count} nueva(s), {result.existing_count} revisada(s).",
+        )
+        st.rerun()
+
+    matches = load_reimbursement_matches(
+        session_factory,
+        user_profile_id=selected_profile_id,
+        statuses=[ReimbursementMatchStatus.SUGGESTED],
+    )
+    if not matches:
+        st.info("No hay sugerencias de reembolso pendientes.")
+        return
+
+    st.dataframe(
+        pd.DataFrame(reimbursement_match_table_rows(matches)),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    selected_match_id = st.selectbox(
+        "Sugerencia",
+        options=[match.id for match in matches],
+        format_func={match.id: reimbursement_match_label(match) for match in matches}.get,
+        key="reimbursement_match_id",
+    )
+    selected_match = next(match for match in matches if match.id == selected_match_id)
+    locked_period_override = render_locked_period_override_for_dates(
+        session_factory,
+        user_profile_id=selected_profile_id,
+        transaction_dates=[
+            selected_match.shared_expense_allocation.transaction.transaction_date,
+            selected_match.reimbursement_transaction.transaction_date,
+        ],
+        key=f"reimbursement_match_locked_period_override_{selected_match_id}",
+    )
+
+    confirm_column, reject_column = st.columns(2)
+    with confirm_column:
+        if st.button("Confirmar reembolso", type="primary"):
+            try:
+                confirm_reimbursement_match_from_ui(
+                    session_factory,
+                    user_profile_id=selected_profile_id,
+                    reimbursement_match_id=selected_match_id,
+                    allow_locked_period_override=locked_period_override,
+                )
+            except ValueError as exc:
+                st.error(str(exc))
+                return
+            flash_success("transactions", "Reembolso confirmado.")
+            st.rerun()
+    with reject_column:
+        if st.button("Rechazar sugerencia"):
+            try:
+                reject_reimbursement_match_from_ui(
+                    session_factory,
+                    user_profile_id=selected_profile_id,
+                    reimbursement_match_id=selected_match_id,
+                    allow_locked_period_override=locked_period_override,
+                )
+            except ValueError as exc:
+                st.error(str(exc))
+                return
+            flash_success("transactions", "Sugerencia de reembolso rechazada.")
+            st.rerun()
+
+
+def render_reports(session_factory, selected_profile_id: int | None) -> None:
+    if selected_profile_id is None:
+        st.info("Selecciona un perfil para ver informes.")
+        return
+
+    today = date.today()
+    start_column, end_column, basis_column, transfer_column = st.columns(4)
+    with start_column:
+        start_date = st.date_input(
+            "Desde",
+            value=date(today.year, today.month, 1),
+            key="report_start_date",
+        )
+    with end_column:
+        end_date = st.date_input("Hasta", value=today, key="report_end_date")
+    with basis_column:
+        amount_basis_label = st.segmented_control(
+            "Base",
+            report_amount_basis_labels(),
+            default="Personal",
+            key="report_amount_basis",
+        )
+    with transfer_column:
+        include_transfers = st.checkbox(
+            "Incluir transferencias",
+            key="report_include_transfers",
+        )
+
+    amount_basis = report_amount_basis_from_label(amount_basis_label or "Personal")
+    if start_date > end_date:
+        st.warning("La fecha inicial no puede ser posterior a la fecha final.")
+        return
+
+    with session_scope(session_factory) as session:
+        reporting_service = ReportingService(AccountingRepository(session))
+        cashflow_summary = reporting_service.summarize_cashflow(
+            user_profile_id=selected_profile_id,
+            start_date=start_date,
+            end_date=end_date,
+            include_transfers=include_transfers,
+            amount_basis=amount_basis,
+        )
+        category_totals = reporting_service.summarize_by_category(
+            user_profile_id=selected_profile_id,
+            start_date=start_date,
+            end_date=end_date,
+            include_transfers=include_transfers,
+            amount_basis=amount_basis,
+        )
+
+    st.subheader("Resumen")
+    inflow_column, outflow_column, net_column, neutral_column = st.columns(4)
+    inflow_column.metric("Ingresos", format_amount_minor(cashflow_summary.inflow_minor))
+    outflow_column.metric("Gastos", format_amount_minor(cashflow_summary.outflow_minor))
+    net_column.metric("Neto", format_signed_amount_minor(cashflow_summary.net_minor))
+    neutral_column.metric("Neutral", format_amount_minor(cashflow_summary.neutral_minor))
+
+    st.subheader("Categorías")
+    rows = category_total_table_rows(category_totals)
+    if not rows:
+        st.info("No hay movimientos en el periodo seleccionado.")
+        return
+    st.dataframe(
+        pd.DataFrame(rows),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+def render_create_category_form(session_factory, *, selected_profile_id: int) -> None:
+    st.subheader("Crear categoría")
+    show_category_advanced = st.checkbox(
+        "Opciones avanzadas",
+        key="create_category_advanced",
+    )
+    with st.form("create_category", clear_on_submit=True):
+        category_name = st.text_input("Nombre de la categoría")
+        category_type = st.selectbox("Tipo de categoría", enum_values(CategoryType))
+        canonical_key = ""
+        display_order = 0
+        if show_category_advanced:
+            canonical_key = st.text_input("Clave canónica")
+            display_order = st.number_input("Orden", min_value=0, step=1)
+        submitted = st.form_submit_button("Crear categoría")
+        if submitted:
+            try:
+                category = create_category_from_ui(
+                    session_factory,
+                    user_profile_id=selected_profile_id,
+                    name=category_name,
+                    category_type=CategoryType(category_type),
+                    canonical_key=canonical_key or None,
+                    display_order=int(display_order),
+                )
+                flash_success("categories", f"Categoría creada: {category.name}")
+                st.rerun()
+            except IntegrityError as exc:
+                st.warning(friendly_integrity_error_message(exc))
+
 
 def render_categories(session_factory, selected_profile_id: int | None) -> None:
     if selected_profile_id is None:
@@ -441,6 +1108,12 @@ def render_categories(session_factory, selected_profile_id: int | None) -> None:
         return
 
     render_flash_success("categories")
+    render_create_category_form(
+        session_factory,
+        selected_profile_id=selected_profile_id,
+    )
+    st.divider()
+
     show_advanced = st.checkbox("Vista avanzada")
     categories = load_categories(
         session_factory,
@@ -1849,6 +2522,33 @@ def update_category_for_ui(
     category.is_active = is_active
 
 
+def create_category_from_ui(
+    session_factory,
+    *,
+    user_profile_id: int,
+    name: str,
+    category_type: CategoryType,
+    canonical_key: str | None,
+    display_order: int,
+) -> Category:
+    resolved_canonical_key = (
+        canonical_key.strip()
+        if canonical_key and canonical_key.strip()
+        else canonical_key_from_name(name)
+    )
+    with session_scope(session_factory) as session:
+        service = AccountingService(AccountingRepository(session))
+        category = service.create_category(
+            user_profile_id=user_profile_id,
+            name=name,
+            category_type=category_type,
+            canonical_key=resolved_canonical_key,
+            display_order=display_order,
+        )
+        session.flush()
+        return category
+
+
 def deactivate_category_for_ui(
     service: AccountingService,
     user_profile_id: int,
@@ -1917,12 +2617,367 @@ def category_table_success_message(
     return "Categorías guardadas: " + ", ".join(parts)
 
 
+def transaction_review_queue_rows(
+    transactions,
+    *,
+    account_labels: dict[int, str],
+    category_labels: dict[int | None, str],
+    decision_by_transaction_id: dict[int, ClassificationDecision],
+) -> list[dict]:
+    return [
+        {
+            "id": transaction.id,
+            "fecha": transaction.transaction_date,
+            "descripcion": transaction.description_clean or "",
+            "importe": format_amount_minor(transaction.amount_minor),
+            "direccion": transaction.direction.value,
+            "cuenta": account_labels.get(
+                transaction.account_id,
+                f"Cuenta {transaction.account_id}",
+            ),
+            "categoria actual": category_labels.get(
+                transaction.category_id,
+                "Sin categoría",
+            ),
+            "sugerencia": classification_decision_summary(
+                decision_by_transaction_id.get(transaction.id),
+                category_labels,
+            ),
+        }
+        for transaction in sorted(
+            transactions,
+            key=lambda transaction: (transaction.transaction_date, transaction.id),
+        )
+    ]
+
+
+def review_transaction_label(transaction: Transaction) -> str:
+    return (
+        f"{transaction.id} · {transaction.transaction_date.isoformat()} · "
+        f"{transaction.description_clean or ''} · "
+        f"{format_amount_minor(transaction.amount_minor)}"
+    )
+
+
+def classification_decision_summary(
+    decision: ClassificationDecision | None,
+    category_labels: dict[int | None, str],
+) -> str:
+    if decision is None:
+        return "Sin sugerencia"
+    category_label = category_labels.get(decision.category_id, "Sin categoría")
+    parts = [category_label]
+    if decision.transaction_type is not None:
+        parts.append(decision.transaction_type.value)
+    if decision.payment_method is not None:
+        parts.append(decision.payment_method.value)
+    parts.append(decision.decision_source.value)
+    parts.append(decision.decision_status.value)
+    return " · ".join(parts)
+
+
+def suggested_payment_method_for_review(transaction: Transaction) -> PaymentMethod | None:
+    description = f"{transaction.description_clean or ''} {transaction.description_raw or ''}"
+    if re.search(r"\b(?:tikkie|bizum)\b", description, flags=re.IGNORECASE):
+        return PaymentMethod.PEER_TO_PEER
+    if transaction.payment_method is not None:
+        return transaction.payment_method
+    if re.search(r"\b(?:tarjeta|card)\b", description, flags=re.IGNORECASE):
+        return PaymentMethod.CARD
+    return None
+
+
+def suggested_classification_rule_pattern(transaction: Transaction) -> str:
+    description = transaction.description_clean or transaction.description_raw or ""
+    description = re.sub(
+        r"\b(?:tarjeta|card)\s*:?\s*[0-9* ]{4,}\b",
+        " ",
+        description,
+        flags=re.IGNORECASE,
+    )
+    description = description.split(",", maxsplit=1)[0]
+    description = re.sub(r"\b\d+\b\s*$", " ", description)
+    description = re.sub(r"\s+", " ", description).strip(" ,.-")
+    return repeated_merchant_base_pattern(description)[:120]
+
+
+def repeated_merchant_base_pattern(description: str) -> str:
+    tokens = description.split()
+    if len(tokens) < 3:
+        return description
+
+    if len(tokens) % 2 == 0:
+        midpoint = len(tokens) // 2
+        if normalized_token_sequence(tokens[:midpoint]) == normalized_token_sequence(
+            tokens[midpoint:]
+        ):
+            return " ".join(tokens[:midpoint])
+
+    for index in range(1, len(tokens) - 1):
+        if tokens[index].lower() != "a":
+            continue
+        before = tokens[:index]
+        after = tokens[index + 1 :]
+        if len(after) == 1 and token_looks_like_opaque_reference(after[0]):
+            return " ".join(before)
+        if normalized_token_sequence(before) == normalized_token_sequence(after):
+            return " ".join(before)
+    return description
+
+
+def normalized_token_sequence(tokens: list[str]) -> list[str]:
+    return [re.sub(r"[^a-zA-Z0-9]+", "", token).lower() for token in tokens]
+
+
+def token_looks_like_opaque_reference(token: str) -> bool:
+    normalized_token = re.sub(r"[^a-zA-Z0-9]+", "", token)
+    return (
+        len(normalized_token) >= 8
+        and any(character.isalpha() for character in normalized_token)
+        and any(character.isdigit() for character in normalized_token)
+    )
+
+
+def learned_classification_rule_name(pattern: str) -> str:
+    if not pattern:
+        return "Regla aprendida"
+    return f"Aprendida: {pattern[:80]}"
+
+
+def matching_classification_rule_for_review(
+    rules: list[ClassificationRule],
+    *,
+    pattern: str,
+    category_id: int,
+    transaction_type: TransactionType,
+    payment_method: PaymentMethod | None,
+    direction: Direction,
+) -> ClassificationRule | None:
+    normalized_pattern = pattern.strip().lower()
+    for rule in rules:
+        if (
+            rule.is_active
+            and rule.rule_type == ClassificationRuleType.DESCRIPTION_CONTAINS
+            and rule.match_field == ClassificationMatchField.DESCRIPTION_CLEAN
+            and rule.pattern.strip().lower() == normalized_pattern
+            and rule.category_id == category_id
+            and rule.transaction_type == transaction_type
+            and rule.payment_method == payment_method
+            and rule.direction == direction
+        ):
+            return rule
+    return None
+
+
+def conflicting_classification_rule_for_review(
+    rules: list[ClassificationRule],
+    *,
+    pattern: str,
+    category_id: int,
+    transaction_type: TransactionType,
+    payment_method: PaymentMethod | None,
+    direction: Direction,
+) -> ClassificationRule | None:
+    normalized_pattern = pattern.strip().lower()
+    for rule in rules:
+        if not (
+            rule.is_active
+            and rule.rule_type == ClassificationRuleType.DESCRIPTION_CONTAINS
+            and rule.match_field == ClassificationMatchField.DESCRIPTION_CLEAN
+            and rule.pattern.strip().lower() == normalized_pattern
+            and rule.direction == direction
+        ):
+            continue
+        if (
+            rule.category_id != category_id
+            or rule.transaction_type != transaction_type
+            or rule.payment_method != payment_method
+        ):
+            return rule
+    return None
+
+
+def matching_classification_rule_for_transaction_review(
+    rules: list[ClassificationRule],
+    *,
+    transaction: Transaction,
+    category_id: int,
+    transaction_type: TransactionType,
+    payment_method: PaymentMethod | None,
+) -> ClassificationRule | None:
+    for rule in rules:
+        if not classification_rule_target_is_compatible_with_review(
+            rule,
+            category_id=category_id,
+            transaction_type=transaction_type,
+            payment_method=payment_method,
+            direction=transaction.direction,
+        ):
+            continue
+        if classification_rule_matches_review_transaction(rule, transaction):
+            return rule
+    return None
+
+
+def conflicting_classification_rule_for_transaction_review(
+    rules: list[ClassificationRule],
+    *,
+    transaction: Transaction,
+    category_id: int,
+    transaction_type: TransactionType,
+    payment_method: PaymentMethod | None,
+) -> ClassificationRule | None:
+    for rule in rules:
+        if not classification_rule_matches_review_transaction(rule, transaction):
+            continue
+        if not classification_rule_target_is_compatible_with_review(
+            rule,
+            category_id=category_id,
+            transaction_type=transaction_type,
+            payment_method=payment_method,
+            direction=transaction.direction,
+        ):
+            return rule
+    return None
+
+
+def classification_rule_target_is_compatible_with_review(
+    rule: ClassificationRule,
+    *,
+    category_id: int,
+    transaction_type: TransactionType,
+    payment_method: PaymentMethod | None,
+    direction: Direction,
+) -> bool:
+    return (
+        rule.is_active
+        and rule.category_id == category_id
+        and rule.direction in {None, direction}
+        and rule.transaction_type in {None, transaction_type}
+        and rule.payment_method in {None, payment_method}
+    )
+
+
+def classification_rule_matches_review_transaction(
+    rule: ClassificationRule,
+    transaction: Transaction,
+) -> bool:
+    if not rule.is_active:
+        return False
+    if rule.direction is not None and rule.direction != transaction.direction:
+        return False
+    if (
+        rule.amount_min_minor is not None
+        and transaction.amount_minor < rule.amount_min_minor
+    ):
+        return False
+    if (
+        rule.amount_max_minor is not None
+        and transaction.amount_minor > rule.amount_max_minor
+    ):
+        return False
+    if rule.match_field == ClassificationMatchField.DESCRIPTION_RAW:
+        value = normalize_classification_text(transaction.description_raw or "")
+    else:
+        value = normalize_classification_text(transaction.description_clean or "")
+    if not value:
+        return False
+    if rule.rule_type == ClassificationRuleType.DESCRIPTION_CONTAINS:
+        return normalize_classification_text(rule.pattern) in value
+    if rule.rule_type == ClassificationRuleType.DESCRIPTION_REGEX:
+        try:
+            return re.search(rule.pattern, value, flags=re.IGNORECASE) is not None
+        except re.error:
+            return False
+    return False
+
+
+def refresh_pending_classifications_after_rule_update(
+    repository: AccountingRepository,
+    *,
+    user_profile_id: int,
+) -> int:
+    classifier = DeterministicClassificationService(repository)
+    updated_count = 0
+    for transaction in repository.list_transactions(
+        user_profile_id=user_profile_id,
+        review_status=TransactionReviewStatus.PENDING_REVIEW,
+    ):
+        result = classifier.classify_transaction(
+            user_profile_id=user_profile_id,
+            transaction=transaction,
+        )
+        if result is None:
+            continue
+        decisions = repository.list_classification_decisions(
+            transaction_id=transaction.id,
+            user_profile_id=user_profile_id,
+        )
+        active_decisions = [
+            decision
+            for decision in decisions
+            if decision.decision_status != ClassificationDecisionStatus.SUPERSEDED
+        ]
+        if active_decisions and classification_result_matches_decision(
+            result,
+            active_decisions[-1],
+            transaction,
+        ):
+            continue
+        classifier.classify_and_record_transaction(
+            user_profile_id=user_profile_id,
+            transaction=transaction,
+            decided_by="system",
+        )
+        updated_count += 1
+    return updated_count
+
+
+def refresh_pending_classifications_from_ui(
+    session_factory,
+    *,
+    user_profile_id: int,
+) -> int:
+    with session_scope(session_factory) as session:
+        updated_count = refresh_pending_classifications_after_rule_update(
+            AccountingRepository(session),
+            user_profile_id=user_profile_id,
+        )
+        session.flush()
+        return updated_count
+
+
+def classification_result_matches_decision(
+    result,
+    decision: ClassificationDecision,
+    transaction: Transaction,
+) -> bool:
+    if (
+        decision.decision_source != result.decision_source
+        or decision.decision_status != result.decision_status
+        or decision.classification_rule_id != result.classification_rule_id
+        or decision.category_id != result.category_id
+        or decision.transaction_type != result.transaction_type
+        or decision.payment_method != result.payment_method
+    ):
+        return False
+    if result.should_apply_to_transaction:
+        return (
+            transaction.category_id == result.category_id
+            and transaction.transaction_type == result.transaction_type
+            and transaction.payment_method == result.payment_method
+        )
+    return True
+
+
 def transaction_table_rows(
     transactions,
     *,
     account_labels: dict[int, str],
     category_labels: dict[int | None, str],
+    shared_transaction_ids: set[int] | None = None,
 ) -> list[dict]:
+    shared_transaction_ids = shared_transaction_ids or set()
     return [
         {
             "id": transaction.id,
@@ -1944,6 +2999,7 @@ def transaction_table_rows(
                 if transaction.payment_method is not None
                 else ""
             ),
+            "compartida": "sí" if transaction.id in shared_transaction_ids else "",
             "estado": transaction.review_status.value,
             "eliminar": False,
         }
@@ -2214,6 +3270,70 @@ def load_categories(session_factory, user_profile_id: int, *, include_inactive: 
         )
 
 
+def load_counterparties(
+    session_factory,
+    user_profile_id: int,
+    *,
+    include_inactive: bool = False,
+):
+    with session_scope(session_factory) as session:
+        return AccountingRepository(session).list_counterparties(
+            user_profile_id,
+            include_inactive=include_inactive,
+        )
+
+
+def load_classification_rules(
+    session_factory,
+    user_profile_id: int,
+    *,
+    include_inactive: bool = False,
+):
+    with session_scope(session_factory) as session:
+        return AccountingRepository(session).list_classification_rules(
+            user_profile_id=user_profile_id,
+            include_inactive=include_inactive,
+        )
+
+
+def load_latest_classification_decisions(
+    session_factory,
+    *,
+    user_profile_id: int,
+    transaction_ids: list[int],
+) -> dict[int, ClassificationDecision]:
+    latest_by_transaction_id = {}
+    with session_scope(session_factory) as session:
+        repository = AccountingRepository(session)
+        for transaction_id in transaction_ids:
+            decisions = repository.list_classification_decisions(
+                transaction_id=transaction_id,
+                user_profile_id=user_profile_id,
+            )
+            active_decisions = [
+                decision
+                for decision in decisions
+                if decision.decision_status
+                != ClassificationDecisionStatus.SUPERSEDED
+            ]
+            if active_decisions:
+                latest_by_transaction_id[transaction_id] = active_decisions[-1]
+    return latest_by_transaction_id
+
+
+def load_reimbursement_matches(
+    session_factory,
+    *,
+    user_profile_id: int,
+    statuses: list[ReimbursementMatchStatus] | None = None,
+):
+    with session_scope(session_factory) as session:
+        return AccountingRepository(session).list_reimbursement_matches_for_profile(
+            user_profile_id=user_profile_id,
+            statuses=statuses,
+        )
+
+
 def load_accounting_lists(
     session_factory,
     user_profile_id: int,
@@ -2241,6 +3361,756 @@ def format_signed_amount_minor(amount_minor: int) -> str:
     return f"{sign}{format_amount_minor(abs(amount_minor))}"
 
 
+def report_amount_basis_labels() -> list[str]:
+    return ["Personal", "Bruto"]
+
+
+def report_amount_basis_from_label(label: str) -> ReportAmountBasis:
+    if label == "Bruto":
+        return ReportAmountBasis.GROSS
+    return ReportAmountBasis.PERSONAL
+
+
+def category_total_table_rows(category_totals) -> list[dict]:
+    return [
+        {
+            "categoría": total.category_name or "Sin categoría",
+            "tipo": total.category_type.value if total.category_type is not None else "",
+            "importe": format_signed_amount_minor(total.amount_minor),
+        }
+        for total in category_totals
+    ]
+
+
+def classification_rule_table_rows(rules: list[ClassificationRule]) -> list[dict]:
+    return [
+        {
+            "nombre": rule.name,
+            "patrón": rule.pattern,
+            "categoría": rule.category.name if rule.category is not None else "",
+            "dirección": rule.direction.value if rule.direction is not None else "",
+            "tipo": (
+                rule.transaction_type.value
+                if rule.transaction_type is not None
+                else ""
+            ),
+            "confianza": f"{int(rule.confidence * Decimal('100'))}%",
+            "auto": "sí" if rule.auto_apply else "",
+        }
+        for rule in rules
+    ]
+
+
+def classification_rule_editor_rows(
+    rules: list[ClassificationRule],
+    *,
+    category_labels: dict[int, str],
+) -> list[dict]:
+    return [
+        {
+            "id": rule.id,
+            "nombre": rule.name,
+            "patrón": rule.pattern,
+            "categoría": (
+                category_labels.get(rule.category_id, "Sin categoría")
+                if rule.category_id is not None
+                else "Sin categoría"
+            ),
+            "tipo_regla": rule.rule_type.value,
+            "campo": rule.match_field.value,
+            "dirección": rule.direction.value if rule.direction is not None else "",
+            "tipo": (
+                rule.transaction_type.value
+                if rule.transaction_type is not None
+                else ""
+            ),
+            "método": rule.payment_method.value
+            if rule.payment_method is not None
+            else "",
+            "importe_mínimo": format_amount_minor(rule.amount_min_minor)
+            if rule.amount_min_minor is not None
+            else "",
+            "importe_máximo": format_amount_minor(rule.amount_max_minor)
+            if rule.amount_max_minor is not None
+            else "",
+            "prioridad": rule.priority,
+            "confianza": int(rule.confidence * Decimal("100")),
+            "autoaplicar": rule.auto_apply,
+            "activa": rule.is_active,
+            "acción": "",
+        }
+        for rule in rules
+    ]
+
+
+def classification_rule_editor_column_config(
+    *,
+    category_options: list[str],
+) -> dict:
+    return {
+        "id": st.column_config.NumberColumn("id"),
+        "nombre": st.column_config.TextColumn("nombre", required=True),
+        "patrón": st.column_config.TextColumn("patrón", required=True),
+        "categoría": st.column_config.SelectboxColumn(
+            "categoría",
+            options=category_options,
+            required=True,
+        ),
+        "tipo_regla": st.column_config.SelectboxColumn(
+            "tipo regla",
+            options=enum_values(ClassificationRuleType),
+            required=True,
+        ),
+        "campo": st.column_config.SelectboxColumn(
+            "campo",
+            options=enum_values(ClassificationMatchField),
+            required=True,
+        ),
+        "dirección": st.column_config.SelectboxColumn(
+            "dirección",
+            options=[""] + enum_values(Direction),
+            required=False,
+        ),
+        "tipo": st.column_config.SelectboxColumn(
+            "tipo",
+            options=[""] + enum_values(TransactionType),
+            required=False,
+        ),
+        "método": st.column_config.SelectboxColumn(
+            "método",
+            options=[""] + enum_values(PaymentMethod),
+            required=False,
+        ),
+        "importe_mínimo": st.column_config.TextColumn("importe mínimo"),
+        "importe_máximo": st.column_config.TextColumn("importe máximo"),
+        "prioridad": st.column_config.NumberColumn("prioridad", min_value=0, step=1),
+        "confianza": st.column_config.NumberColumn(
+            "confianza %",
+            min_value=0,
+            max_value=100,
+            step=1,
+        ),
+        "autoaplicar": st.column_config.CheckboxColumn("autoaplicar"),
+        "activa": st.column_config.CheckboxColumn("activa"),
+        "acción": st.column_config.SelectboxColumn(
+            "acción",
+            options=["", "Borrar definitivamente"],
+            required=False,
+        ),
+    }
+
+
+def apply_classification_rule_table_changes(
+    session_factory,
+    *,
+    user_profile_id: int,
+    original_rules: list[ClassificationRule],
+    edited_rows: list[dict],
+    category_ids_by_label: dict[str, int | None],
+) -> tuple[int, int, int]:
+    original_by_id = {rule.id: rule for rule in original_rules}
+    updated_count = 0
+    hard_deleted_count = 0
+    unlinked_decision_count = 0
+    with session_scope(session_factory) as session:
+        service = AccountingService(AccountingRepository(session))
+        for row in edited_rows:
+            rule_id = int(row["id"])
+            rule = original_by_id[rule_id]
+            if row.get("acción") == "Borrar definitivamente":
+                unlinked_decision_count += hard_delete_classification_rule_for_ui(
+                    service,
+                    user_profile_id=user_profile_id,
+                    classification_rule_id=rule_id,
+                )
+                hard_deleted_count += 1
+                continue
+            payload = edited_classification_rule_payload(
+                row,
+                category_ids_by_label=category_ids_by_label,
+            )
+            if not classification_rule_row_changed(rule, payload):
+                continue
+            update_classification_rule_for_ui(
+                service,
+                user_profile_id=user_profile_id,
+                classification_rule_id=rule_id,
+                name=payload["name"],
+                rule_type=payload["rule_type"],
+                match_field=payload["match_field"],
+                pattern=payload["pattern"],
+                category_id=payload["category_id"],
+                transaction_type=payload["transaction_type"],
+                payment_method=payload["payment_method"],
+                direction=payload["direction"],
+                amount_min_minor=payload["amount_min_minor"],
+                amount_max_minor=payload["amount_max_minor"],
+                priority=payload["priority"],
+                confidence=payload["confidence"],
+                auto_apply=payload["auto_apply"],
+                is_active=payload["is_active"],
+            )
+            updated_count += 1
+    return updated_count, hard_deleted_count, unlinked_decision_count
+
+
+def edited_classification_rule_payload(
+    row: dict,
+    *,
+    category_ids_by_label: dict[str, int | None],
+) -> dict:
+    category_label = normalized_optional_text(row.get("categoría")) or "Sin categoría"
+    if category_label not in category_ids_by_label:
+        raise ValueError(f"La categoría '{category_label}' no existe.")
+    return {
+        "name": required_text(row.get("nombre"), "La regla necesita nombre."),
+        "pattern": required_text(row.get("patrón"), "La regla necesita patrón."),
+        "category_id": category_ids_by_label[category_label],
+        "rule_type": ClassificationRuleType(
+            required_text(row.get("tipo_regla"), "La regla necesita tipo.")
+        ),
+        "match_field": ClassificationMatchField(
+            required_text(row.get("campo"), "La regla necesita campo.")
+        ),
+        "direction": optional_enum_value(row.get("dirección"), Direction),
+        "transaction_type": optional_enum_value(row.get("tipo"), TransactionType),
+        "payment_method": optional_enum_value(row.get("método"), PaymentMethod),
+        "amount_min_minor": parse_optional_amount_minor(
+            normalized_optional_text(row.get("importe_mínimo")) or ""
+        ),
+        "amount_max_minor": parse_optional_amount_minor(
+            normalized_optional_text(row.get("importe_máximo")) or ""
+        ),
+        "priority": int(row.get("prioridad") or 0),
+        "confidence": (
+            Decimal(str(int(row.get("confianza") or 0))) / Decimal("100")
+        ).quantize(Decimal("0.0001")),
+        "auto_apply": bool(row.get("autoaplicar")),
+        "is_active": bool(row.get("activa")),
+    }
+
+
+def classification_rule_row_changed(rule: ClassificationRule, payload: dict) -> bool:
+    return (
+        rule.name != payload["name"]
+        or rule.pattern != payload["pattern"]
+        or rule.category_id != payload["category_id"]
+        or rule.rule_type != payload["rule_type"]
+        or rule.match_field != payload["match_field"]
+        or rule.direction != payload["direction"]
+        or rule.transaction_type != payload["transaction_type"]
+        or rule.payment_method != payload["payment_method"]
+        or rule.amount_min_minor != payload["amount_min_minor"]
+        or rule.amount_max_minor != payload["amount_max_minor"]
+        or rule.priority != payload["priority"]
+        or rule.confidence != payload["confidence"]
+        or rule.auto_apply != payload["auto_apply"]
+        or rule.is_active != payload["is_active"]
+    )
+
+
+def classification_rule_table_success_message(
+    *,
+    updated_count: int,
+    hard_deleted_count: int,
+    unlinked_decision_count: int = 0,
+) -> str:
+    messages = []
+    if updated_count == 1:
+        messages.append("1 regla actualizada")
+    elif updated_count:
+        messages.append(f"{updated_count} reglas actualizadas")
+    if hard_deleted_count == 1:
+        messages.append("1 regla borrada definitivamente")
+    elif hard_deleted_count:
+        messages.append(f"{hard_deleted_count} reglas borradas definitivamente")
+    if unlinked_decision_count == 1:
+        messages.append("1 decisión conserva la auditoría sin enlace a la regla")
+    elif unlinked_decision_count:
+        messages.append(
+            f"{unlinked_decision_count} decisiones conservan la auditoría "
+            "sin enlace a la regla"
+        )
+    return ". ".join(messages) + "."
+
+
+def hard_delete_classification_rule_for_ui(
+    service: AccountingService,
+    *,
+    user_profile_id: int,
+    classification_rule_id: int,
+) -> int:
+    if hasattr(service, "hard_delete_classification_rule"):
+        return service.hard_delete_classification_rule(
+            user_profile_id=user_profile_id,
+            classification_rule_id=classification_rule_id,
+        )
+
+    rule = service.repository.session.get(ClassificationRule, classification_rule_id)
+    if rule is None or rule.user_profile_id != user_profile_id:
+        raise ValueError("La regla no existe para este perfil.")
+    decisions = list(
+        service.repository.session.scalars(
+            select(ClassificationDecision)
+            .join(Transaction)
+            .where(
+                ClassificationDecision.classification_rule_id
+                == classification_rule_id,
+                Transaction.user_profile_id == user_profile_id,
+            )
+        )
+    )
+    for decision in decisions:
+        decision.classification_rule_id = None
+    service.repository.session.delete(rule)
+    return len(decisions)
+
+
+def update_classification_rule_for_ui(
+    service: AccountingService,
+    *,
+    user_profile_id: int,
+    classification_rule_id: int,
+    name: str,
+    rule_type: ClassificationRuleType,
+    match_field: ClassificationMatchField,
+    pattern: str,
+    category_id: int | None,
+    transaction_type: TransactionType | None,
+    payment_method: PaymentMethod | None,
+    direction: Direction | None,
+    amount_min_minor: int | None,
+    amount_max_minor: int | None,
+    priority: int,
+    confidence: Decimal,
+    auto_apply: bool,
+    is_active: bool,
+) -> None:
+    if hasattr(service, "update_classification_rule"):
+        service.update_classification_rule(
+            user_profile_id=user_profile_id,
+            classification_rule_id=classification_rule_id,
+            name=name,
+            rule_type=rule_type,
+            match_field=match_field,
+            pattern=pattern,
+            category_id=category_id,
+            transaction_type=transaction_type,
+            payment_method=payment_method,
+            direction=direction,
+            amount_min_minor=amount_min_minor,
+            amount_max_minor=amount_max_minor,
+            priority=priority,
+            confidence=confidence,
+            auto_apply=auto_apply,
+            is_active=is_active,
+        )
+        return
+
+    validate_classification_rule_payload_for_ui(
+        service,
+        user_profile_id=user_profile_id,
+        name=name,
+        rule_type=rule_type,
+        pattern=pattern,
+        category_id=category_id,
+        transaction_type=transaction_type,
+        amount_min_minor=amount_min_minor,
+        amount_max_minor=amount_max_minor,
+        confidence=confidence,
+        is_active=is_active,
+    )
+    rule = service.repository.session.get(ClassificationRule, classification_rule_id)
+    if rule is None or rule.user_profile_id != user_profile_id:
+        raise ValueError("La regla no existe para este perfil.")
+
+    rule.name = name.strip()
+    rule.rule_type = rule_type
+    rule.match_field = match_field
+    rule.pattern = pattern.strip()
+    rule.category_id = category_id
+    rule.transaction_type = transaction_type
+    rule.payment_method = payment_method
+    rule.direction = direction
+    rule.amount_min_minor = amount_min_minor
+    rule.amount_max_minor = amount_max_minor
+    rule.priority = priority
+    rule.confidence = confidence
+    rule.auto_apply = auto_apply
+    rule.is_active = is_active
+
+
+def validate_classification_rule_payload_for_ui(
+    service: AccountingService,
+    *,
+    user_profile_id: int,
+    name: str,
+    rule_type: ClassificationRuleType,
+    pattern: str,
+    category_id: int | None,
+    transaction_type: TransactionType | None,
+    amount_min_minor: int | None,
+    amount_max_minor: int | None,
+    confidence: Decimal,
+    is_active: bool,
+) -> None:
+    if not name.strip():
+        raise ValueError("La regla necesita nombre.")
+    if not pattern.strip():
+        raise ValueError("La regla necesita patrón.")
+    if rule_type == ClassificationRuleType.DESCRIPTION_REGEX:
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise ValueError("El patrón regex de la regla no es válido.") from exc
+    if confidence < Decimal("0") or confidence > Decimal("1"):
+        raise ValueError("La confianza de la regla debe estar entre 0 y 100%.")
+    if (
+        amount_min_minor is not None
+        and amount_max_minor is not None
+        and amount_min_minor > amount_max_minor
+    ):
+        raise ValueError("El rango de importes de la regla no es válido.")
+    if category_id is None:
+        return
+
+    category = service.repository.get_category(
+        category_id=category_id,
+        user_profile_id=user_profile_id,
+    )
+    if category is None:
+        raise ValueError("La categoría de la regla no existe para este perfil.")
+    if is_active and not category.is_active:
+        raise ValueError("Una regla activa necesita una categoría activa.")
+    if transaction_type is not None and not ui_category_type_matches_transaction_type(
+        category.category_type,
+        transaction_type,
+    ):
+        raise ValueError("La categoría y el tipo de transacción no son compatibles.")
+
+
+def ui_category_type_matches_transaction_type(
+    category_type: CategoryType,
+    transaction_type: TransactionType,
+) -> bool:
+    if category_type == CategoryType.INCOME:
+        return transaction_type == TransactionType.INCOME
+    if category_type == CategoryType.EXPENSE:
+        return transaction_type in {
+            TransactionType.EXPENSE,
+            TransactionType.FEE,
+            TransactionType.TAX,
+            TransactionType.REFUND,
+        }
+    if category_type == CategoryType.TRANSFER:
+        return transaction_type == TransactionType.TRANSFER
+    if category_type == CategoryType.ADJUSTMENT:
+        return transaction_type == TransactionType.ADJUSTMENT
+    if category_type == CategoryType.SAVING:
+        return transaction_type == TransactionType.SAVING
+    if category_type == CategoryType.INVESTMENT:
+        return transaction_type == TransactionType.INVESTMENT
+    if category_type == CategoryType.DEBT:
+        return transaction_type == TransactionType.DEBT_PAYMENT
+    return False
+
+
+def normalized_optional_text(value) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def required_text(value, message: str) -> str:
+    text = normalized_optional_text(value)
+    if text is None:
+        raise ValueError(message)
+    return text
+
+
+def optional_enum_value(value, enum_class):
+    text = normalized_optional_text(value)
+    if text is None:
+        return None
+    return enum_class(text)
+
+
+def counterparty_table_rows(counterparties: list[Counterparty]) -> list[dict]:
+    return [
+        {
+            "nombre": counterparty.display_name,
+            "alias": counterparty.aliases_raw or "",
+        }
+        for counterparty in counterparties
+    ]
+
+
+def reimbursement_match_table_rows(matches: list[ReimbursementMatch]) -> list[dict]:
+    return [
+        {
+            "id": match.id,
+            "contraparte": match.shared_expense_allocation.counterparty.display_name,
+            "gasto": shared_expense_transaction_label(
+                match.shared_expense_allocation.transaction
+            ),
+            "reembolso": shared_expense_transaction_label(
+                match.reimbursement_transaction
+            ),
+            "importe": format_amount_minor(match.matched_amount_minor),
+            "confianza": f"{int(match.confidence * Decimal('100'))}%",
+            "motivo": match.notes or "",
+        }
+        for match in matches
+    ]
+
+
+def reimbursement_match_label(match: ReimbursementMatch) -> str:
+    return (
+        f"{match.id} · "
+        f"{match.shared_expense_allocation.counterparty.display_name} · "
+        f"{format_amount_minor(match.matched_amount_minor)}"
+    )
+
+
+def shared_expense_transaction_label(transaction: Transaction) -> str:
+    return (
+        f"{transaction.id} · {transaction.transaction_date.isoformat()} · "
+        f"{transaction.description_clean or ''} · "
+        f"{format_amount_minor(transaction.amount_minor)}"
+    )
+
+
+def mark_transaction_shared_50_50_from_ui(
+    session_factory,
+    *,
+    user_profile_id: int,
+    transaction_id: int,
+    counterparty_id: int,
+    allow_locked_period_override: bool = False,
+) -> tuple[int, int, int]:
+    with session_scope(session_factory) as session:
+        service = AccountingService(AccountingRepository(session))
+        allocation = service.mark_transaction_shared_50_50(
+            user_profile_id=user_profile_id,
+            transaction_id=transaction_id,
+            counterparty_id=counterparty_id,
+            decided_by="local_ui",
+            allow_locked_period_override=allow_locked_period_override,
+        )
+        session.flush()
+        return (
+            allocation.id,
+            allocation.personal_share_minor,
+            allocation.recoverable_share_minor,
+        )
+
+
+def create_classification_rule_from_ui(
+    session_factory,
+    *,
+    user_profile_id: int,
+    name: str,
+    pattern: str,
+    category_id: int,
+    rule_type: ClassificationRuleType,
+    match_field: ClassificationMatchField,
+    direction: Direction | None,
+    transaction_type: TransactionType | None,
+    payment_method: PaymentMethod | None,
+    amount_min_minor: int | None,
+    amount_max_minor: int | None,
+    priority: int,
+    confidence: Decimal,
+    auto_apply: bool,
+) -> None:
+    with session_scope(session_factory) as session:
+        service = AccountingService(AccountingRepository(session))
+        service.create_classification_rule(
+            user_profile_id=user_profile_id,
+            name=name,
+            rule_type=rule_type,
+            match_field=match_field,
+            pattern=pattern,
+            category_id=category_id,
+            transaction_type=transaction_type,
+            payment_method=payment_method,
+            direction=direction,
+            amount_min_minor=amount_min_minor,
+            amount_max_minor=amount_max_minor,
+            priority=priority,
+            confidence=confidence,
+            auto_apply=auto_apply,
+        )
+
+
+def confirm_imported_transaction_review_from_ui(
+    session_factory,
+    *,
+    user_profile_id: int,
+    transaction_id: int,
+    category_id: int | None,
+    transaction_type: TransactionType,
+    payment_method: PaymentMethod | None,
+    decided_by: str,
+    allow_locked_period_override: bool = False,
+    create_learned_rule: bool = False,
+    learned_rule_pattern: str | None = None,
+    learned_rule_auto_apply: bool = True,
+) -> tuple[int, int | None, int]:
+    with session_scope(session_factory) as session:
+        service = AccountingService(AccountingRepository(session))
+        decision = service.confirm_transaction_classification(
+            user_profile_id=user_profile_id,
+            transaction_id=transaction_id,
+            category_id=category_id,
+            transaction_type=transaction_type,
+            payment_method=payment_method,
+            decided_by=decided_by,
+            notes="Imported transaction review.",
+            allow_locked_period_override=allow_locked_period_override,
+        )
+        session.flush()
+
+        learned_rule_id = None
+        reclassified_count = 0
+        if create_learned_rule:
+            if category_id is None:
+                raise ValueError("Selecciona una categoría para crear una regla.")
+            pattern = (learned_rule_pattern or "").strip()
+            if not pattern:
+                raise ValueError("Introduce un texto para crear la regla.")
+            transaction = service.repository.get_transaction(
+                transaction_id=transaction_id,
+                user_profile_id=user_profile_id,
+            )
+            if transaction is None:
+                raise ValueError("Transaction was not found for the user profile.")
+            active_rules = service.repository.list_classification_rules(
+                user_profile_id=user_profile_id
+            )
+            existing_rule = matching_classification_rule_for_transaction_review(
+                active_rules,
+                transaction=transaction,
+                category_id=category_id,
+                transaction_type=transaction_type,
+                payment_method=payment_method,
+            )
+            if existing_rule is None:
+                conflicting_rule = conflicting_classification_rule_for_transaction_review(
+                    active_rules,
+                    transaction=transaction,
+                    category_id=category_id,
+                    transaction_type=transaction_type,
+                    payment_method=payment_method,
+                )
+                if conflicting_rule is not None:
+                    raise ValueError(
+                        "Ya existe una regla activa que coincide con esta "
+                        "transacción y apunta a otra clasificación. Revisa las "
+                        "reglas en Configuración antes de crear otra."
+                    )
+            if existing_rule is None:
+                existing_rule = matching_classification_rule_for_review(
+                    active_rules,
+                    pattern=pattern,
+                    category_id=category_id,
+                    transaction_type=transaction_type,
+                    payment_method=payment_method,
+                    direction=transaction.direction,
+                )
+            if existing_rule is None:
+                conflicting_rule = conflicting_classification_rule_for_review(
+                    active_rules,
+                    pattern=pattern,
+                    category_id=category_id,
+                    transaction_type=transaction_type,
+                    payment_method=payment_method,
+                    direction=transaction.direction,
+                )
+                if conflicting_rule is not None:
+                    raise ValueError(
+                        "Ya existe una regla activa con ese texto y otra "
+                        "clasificación. Revisa las reglas en Configuración "
+                        "antes de crear otra."
+                    )
+            if existing_rule is None:
+                rule = service.create_classification_rule(
+                    user_profile_id=user_profile_id,
+                    name=learned_classification_rule_name(pattern),
+                    rule_type=ClassificationRuleType.DESCRIPTION_CONTAINS,
+                    match_field=ClassificationMatchField.DESCRIPTION_CLEAN,
+                    pattern=pattern,
+                    category_id=category_id,
+                    transaction_type=transaction_type,
+                    payment_method=payment_method,
+                    direction=transaction.direction,
+                    confidence=Decimal("0.9500"),
+                    auto_apply=learned_rule_auto_apply,
+                )
+                session.flush()
+                learned_rule_id = rule.id
+            else:
+                learned_rule_id = existing_rule.id
+            reclassified_count = refresh_pending_classifications_after_rule_update(
+                service.repository,
+                user_profile_id=user_profile_id,
+            )
+            session.flush()
+        return decision.id, learned_rule_id, reclassified_count
+
+
+def confirm_reimbursement_match_from_ui(
+    session_factory,
+    *,
+    user_profile_id: int,
+    reimbursement_match_id: int,
+    allow_locked_period_override: bool = False,
+) -> None:
+    with session_scope(session_factory) as session:
+        service = AccountingService(AccountingRepository(session))
+        service.confirm_reimbursement_match(
+            user_profile_id=user_profile_id,
+            reimbursement_match_id=reimbursement_match_id,
+            decided_by="local_ui",
+            allow_locked_period_override=allow_locked_period_override,
+        )
+
+
+def reject_reimbursement_match_from_ui(
+    session_factory,
+    *,
+    user_profile_id: int,
+    reimbursement_match_id: int,
+    allow_locked_period_override: bool = False,
+) -> None:
+    with session_scope(session_factory) as session:
+        service = AccountingService(AccountingRepository(session))
+        service.reject_reimbursement_match(
+            user_profile_id=user_profile_id,
+            reimbursement_match_id=reimbursement_match_id,
+            decided_by="local_ui",
+            allow_locked_period_override=allow_locked_period_override,
+        )
+
+
+def waive_shared_expense_from_ui(
+    session_factory,
+    *,
+    user_profile_id: int,
+    transaction_id: int,
+    allow_locked_period_override: bool = False,
+) -> None:
+    with session_scope(session_factory) as session:
+        service = AccountingService(AccountingRepository(session))
+        service.waive_shared_expense_allocation(
+            user_profile_id=user_profile_id,
+            transaction_id=transaction_id,
+            decided_by="local_ui",
+            allow_locked_period_override=allow_locked_period_override,
+        )
+
+
 def parse_amount_minor(value: str) -> int:
     normalized_value = value.replace(",", ".")
     try:
@@ -2250,6 +4120,12 @@ def parse_amount_minor(value: str) -> int:
     if amount < 0:
         raise ValueError("Introduce un importe positivo y usa Dirección.")
     return int((amount * Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def parse_optional_amount_minor(value: str) -> int | None:
+    if not value.strip():
+        return None
+    return parse_amount_minor(value)
 
 
 def canonical_key_from_name(name: str) -> str:
@@ -2410,6 +4286,8 @@ def friendly_integrity_error_message(error: IntegrityError) -> str:
         return "Ya existe una categoría con ese nombre en este perfil."
     if "categories.user_profile_id, categories.canonical_key" in message:
         return "Ya existe una categoría con esa clave canónica en este perfil."
+    if "counterparties.user_profile_id, counterparties.normalized_name" in message:
+        return "Ya existe una contraparte con ese nombre en este perfil."
     return "No se pudo guardar porque ya existe un registro equivalente."
 
 

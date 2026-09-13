@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
@@ -15,8 +16,11 @@ from lxcell.db.models import (
 from lxcell.db.session import create_session_factory, create_sqlite_engine, session_scope
 from lxcell.enums.core_enums import (
     AccountType,
+    CategoryType,
     ClassificationDecisionSource,
     ClassificationDecisionStatus,
+    ClassificationMatchField,
+    ClassificationRuleType,
     Direction,
     ImportAction,
     ImportSourceSystem,
@@ -112,6 +116,74 @@ def test_confirmed_statement_pdf_import_writes_auditable_pending_transactions(
         ClassificationDecisionStatus.SUGGESTED,
         ClassificationDecisionStatus.SUGGESTED,
     ]
+
+
+def test_confirmed_statement_pdf_import_applies_deterministic_rules(
+    session_factory,
+):
+    with session_scope(session_factory) as session:
+        accounting_service = AccountingService(AccountingRepository(session))
+        profile = accounting_service.create_user_profile(display_name="Sample User")
+        session.flush()
+        account = accounting_service.create_account(
+            user_profile_id=profile.id,
+            name="Primary account",
+            account_type=AccountType.CHECKING,
+        )
+        category = accounting_service.create_category(
+            user_profile_id=profile.id,
+            name="Category A",
+            category_type=CategoryType.EXPENSE,
+            canonical_key="category_a",
+        )
+        session.flush()
+        rule = accounting_service.create_classification_rule(
+            user_profile_id=profile.id,
+            name="Merchant A",
+            rule_type=ClassificationRuleType.DESCRIPTION_CONTAINS,
+            match_field=ClassificationMatchField.DESCRIPTION_CLEAN,
+            pattern="merchant a",
+            category_id=category.id,
+            transaction_type=TransactionType.EXPENSE,
+            direction=Direction.OUTFLOW,
+            confidence=Decimal("0.9500"),
+            auto_apply=True,
+        )
+        session.flush()
+
+        result = StatementPdfImportService(
+            AccountingRepository(session)
+        ).confirm_import(
+            user_profile_id=profile.id,
+            account_id=account.id,
+            source_system=ImportSourceSystem.BANK_PDF,
+            preview=sample_preview(),
+            confirmed_by="Sample User",
+            user_confirmed=True,
+        )
+        session.flush()
+
+    with session_scope(session_factory) as session:
+        transactions = list(session.scalars(select(Transaction).order_by(Transaction.id)))
+        decisions = list(
+            session.scalars(
+                select(ClassificationDecision).order_by(ClassificationDecision.id)
+            )
+        )
+
+    assert result.transaction_count == 2
+    assert [transaction.category_id for transaction in transactions] == [
+        category.id,
+        None,
+    ]
+    assert [decision.decision_source for decision in decisions] == [
+        ClassificationDecisionSource.DETERMINISTIC_RULE,
+        ClassificationDecisionSource.IMPORT_DEFAULT,
+    ]
+    assert decisions[0].decision_status == ClassificationDecisionStatus.ACCEPTED
+    assert decisions[0].classification_rule_id == rule.id
+    assert decisions[0].category_id == category.id
+    assert decisions[1].decision_status == ClassificationDecisionStatus.SUGGESTED
 
 
 def test_confirmed_statement_pdf_import_blocks_repeated_completed_file(
@@ -302,6 +374,55 @@ def test_confirmed_statement_pdf_import_can_override_protected_rows(
     ]
 
 
+def test_confirmed_statement_pdf_import_detects_peer_to_peer_payment_method(
+    session_factory,
+):
+    with session_scope(session_factory) as session:
+        accounting_service = AccountingService(AccountingRepository(session))
+        profile = accounting_service.create_user_profile(display_name="Sample User")
+        session.flush()
+        account = accounting_service.create_account(
+            user_profile_id=profile.id,
+            name="Primary account",
+            account_type=AccountType.CHECKING,
+        )
+        session.flush()
+
+        result = StatementPdfImportService(
+            AccountingRepository(session)
+        ).confirm_import(
+            user_profile_id=profile.id,
+            account_id=account.id,
+            source_system=ImportSourceSystem.BANK_PDF,
+            preview=sample_preview(
+                candidates=(
+                    sample_candidate(
+                        row_number_source=1,
+                        description="Transfer via Tikkie",
+                    ),
+                    sample_candidate(
+                        row_number_source=2,
+                        transaction_date=date(2026, 1, 11),
+                        description="Pago Bizum",
+                        content_hash="content456",
+                    ),
+                ),
+            ),
+            confirmed_by="Sample User",
+            user_confirmed=True,
+        )
+        session.flush()
+
+    with session_scope(session_factory) as session:
+        transactions = list(session.scalars(select(Transaction).order_by(Transaction.id)))
+
+    assert result.transaction_count == 2
+    assert [transaction.payment_method for transaction in transactions] == [
+        PaymentMethod.PEER_TO_PEER,
+        PaymentMethod.PEER_TO_PEER,
+    ]
+
+
 def test_confirmed_statement_pdf_import_matches_existing_source_rows(
     session_factory,
 ):
@@ -443,6 +564,7 @@ def sample_candidate(
     amount_minor: int = 1234,
     direction: Direction = Direction.OUTFLOW,
     amount_raw: str = "12,34",
+    content_hash: str = "content123",
 ) -> PdfStatementTransactionCandidate:
     return PdfStatementTransactionCandidate(
         row_number_source=row_number_source,
@@ -465,5 +587,5 @@ def sample_candidate(
             "money_in_raw": amount_raw if direction == Direction.INFLOW else None,
             "balance_raw": "987,66",
         },
-        content_hash="content123",
+        content_hash=content_hash,
     )

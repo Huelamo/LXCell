@@ -11,6 +11,9 @@ from lxcell.db.models import (
     Base,
     Category,
     ClassificationDecision,
+    Counterparty,
+    ReimbursementMatch,
+    SharedExpenseAllocation,
     Transaction,
     UserProfile,
 )
@@ -22,6 +25,8 @@ from lxcell.enums.core_enums import (
     ClassificationDecisionStatus,
     Direction,
     OwnershipType,
+    ReimbursementMatchStatus,
+    SharedExpenseStatus,
     TransactionReviewStatus,
     TransactionSourceType,
     TransactionType,
@@ -48,8 +53,11 @@ def test_phase_1_models_configure_and_create_expected_tables(session_factory):
         "category_mappings",
         "classification_decisions",
         "classification_rules",
+        "counterparties",
         "import_batches",
         "imported_transaction_sources",
+        "reimbursement_matches",
+        "shared_expense_allocations",
         "transactions",
         "user_profiles",
     }
@@ -185,3 +193,131 @@ def test_classification_decision_defaults_to_system_and_decimal_confidence(
 
         assert decision.decided_by == "system"
         assert decision.confidence == Decimal("1.0000")
+
+
+def test_shared_expense_allocation_rejects_counterparty_from_different_profile(
+    session_factory,
+):
+    with session_scope(session_factory) as session:
+        first_profile = UserProfile(display_name="Sample User A")
+        second_profile = UserProfile(display_name="Sample User B")
+        account = Account(
+            user_profile=first_profile,
+            name="Primary account",
+            account_type=AccountType.CHECKING,
+        )
+        counterparty = Counterparty(
+            user_profile=second_profile,
+            display_name="Counterparty A",
+            normalized_name="counterparty_a",
+        )
+        transaction = Transaction(
+            user_profile=first_profile,
+            account=account,
+            transaction_date=date(2026, 1, 1),
+            description_clean="Merchant A",
+            amount_minor=1001,
+            direction=Direction.OUTFLOW,
+            transaction_type=TransactionType.EXPENSE,
+            source_type=TransactionSourceType.MANUAL,
+        )
+        session.add_all([first_profile, second_profile, account, counterparty, transaction])
+        session.flush()
+        first_profile_id = first_profile.id
+        transaction_id = transaction.id
+        counterparty_id = counterparty.id
+
+    with pytest.raises(IntegrityError):
+        with session_scope(session_factory) as session:
+            allocation = SharedExpenseAllocation(
+                user_profile_id=first_profile_id,
+                transaction_id=transaction_id,
+                counterparty_id=counterparty_id,
+                personal_share_minor=501,
+                recoverable_share_minor=500,
+                share_ratio_basis_points=5000,
+                status=SharedExpenseStatus.PENDING,
+            )
+            session.add(allocation)
+            session.flush()
+
+
+def test_reimbursement_match_rejects_transaction_from_different_profile(
+    session_factory,
+):
+    with session_scope(session_factory) as session:
+        first_profile = UserProfile(display_name="Sample User A")
+        second_profile = UserProfile(display_name="Sample User B")
+        first_account = Account(
+            user_profile=first_profile,
+            name="Primary account",
+            account_type=AccountType.CHECKING,
+        )
+        second_account = Account(
+            user_profile=second_profile,
+            name="Other account",
+            account_type=AccountType.CHECKING,
+        )
+        counterparty = Counterparty(
+            user_profile=first_profile,
+            display_name="Counterparty A",
+            normalized_name="counterparty_a",
+        )
+        expense = Transaction(
+            user_profile=first_profile,
+            account=first_account,
+            transaction_date=date(2026, 1, 1),
+            description_clean="Merchant A",
+            amount_minor=1000,
+            direction=Direction.OUTFLOW,
+            transaction_type=TransactionType.EXPENSE,
+            source_type=TransactionSourceType.MANUAL,
+        )
+        reimbursement = Transaction(
+            user_profile=second_profile,
+            account=second_account,
+            transaction_date=date(2026, 1, 2),
+            description_clean="Counterparty A",
+            amount_minor=500,
+            direction=Direction.INFLOW,
+            transaction_type=TransactionType.ADJUSTMENT,
+            source_type=TransactionSourceType.MANUAL,
+        )
+        allocation = SharedExpenseAllocation(
+            user_profile=first_profile,
+            transaction=expense,
+            counterparty=counterparty,
+            personal_share_minor=500,
+            recoverable_share_minor=500,
+            share_ratio_basis_points=5000,
+            status=SharedExpenseStatus.PENDING,
+        )
+        session.add_all(
+            [
+                first_profile,
+                second_profile,
+                first_account,
+                second_account,
+                counterparty,
+                expense,
+                reimbursement,
+                allocation,
+            ]
+        )
+        session.flush()
+        first_profile_id = first_profile.id
+        allocation_id = allocation.id
+        reimbursement_id = reimbursement.id
+
+    with pytest.raises(IntegrityError):
+        with session_scope(session_factory) as session:
+            reimbursement_match = ReimbursementMatch(
+                user_profile_id=first_profile_id,
+                shared_expense_allocation_id=allocation_id,
+                reimbursement_transaction_id=reimbursement_id,
+                matched_amount_minor=500,
+                status=ReimbursementMatchStatus.SUGGESTED,
+                confidence=Decimal("0.9500"),
+            )
+            session.add(reimbursement_match)
+            session.flush()

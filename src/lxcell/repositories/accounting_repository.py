@@ -4,7 +4,7 @@ from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import Select, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from lxcell.db.models import (
     Account,
@@ -13,8 +13,12 @@ from lxcell.db.models import (
     Category,
     CategoryMapping,
     ClassificationDecision,
+    ClassificationRule,
+    Counterparty,
     ImportBatch,
     ImportedTransactionSource,
+    ReimbursementMatch,
+    SharedExpenseAllocation,
     Transaction,
     UserProfile,
 )
@@ -25,13 +29,17 @@ from lxcell.enums.core_enums import (
     CategoryType,
     ClassificationDecisionSource,
     ClassificationDecisionStatus,
+    ClassificationMatchField,
+    ClassificationRuleType,
     Direction,
     ImportAction,
     ImportSourceSystem,
     ImportStatus,
     OwnershipType,
     PaymentMethod,
+    ReimbursementMatchStatus,
     RolloverPolicy,
+    SharedExpenseStatus,
     TransactionReviewStatus,
     TransactionSourceType,
     TransactionType,
@@ -221,6 +229,57 @@ class AccountingRepository:
         statement = select(Category).where(
             Category.id == category_id,
             Category.user_profile_id == user_profile_id,
+        )
+        return self.session.scalar(statement)
+
+    def add_counterparty(
+        self,
+        *,
+        user_profile_id: int,
+        display_name: str,
+        normalized_name: str,
+        aliases_raw: str | None = None,
+        is_active: bool = True,
+    ) -> Counterparty:
+        counterparty = Counterparty(
+            user_profile_id=user_profile_id,
+            display_name=display_name,
+            normalized_name=normalized_name,
+            aliases_raw=aliases_raw,
+            is_active=is_active,
+        )
+        self.session.add(counterparty)
+        return counterparty
+
+    def list_counterparties(
+        self, user_profile_id: int, *, include_inactive: bool = False
+    ) -> list[Counterparty]:
+        statement = select(Counterparty).where(
+            Counterparty.user_profile_id == user_profile_id
+        )
+        if not include_inactive:
+            statement = statement.where(Counterparty.is_active.is_(True))
+        return list(
+            self.session.scalars(
+                statement.order_by(Counterparty.display_name, Counterparty.id)
+            )
+        )
+
+    def get_counterparty(
+        self, *, counterparty_id: int, user_profile_id: int
+    ) -> Counterparty | None:
+        statement = select(Counterparty).where(
+            Counterparty.id == counterparty_id,
+            Counterparty.user_profile_id == user_profile_id,
+        )
+        return self.session.scalar(statement)
+
+    def get_counterparty_by_normalized_name(
+        self, *, user_profile_id: int, normalized_name: str
+    ) -> Counterparty | None:
+        statement = select(Counterparty).where(
+            Counterparty.user_profile_id == user_profile_id,
+            Counterparty.normalized_name == normalized_name,
         )
         return self.session.scalar(statement)
 
@@ -443,6 +502,148 @@ class AccountingRepository:
         )
         return self.session.scalar(statement)
 
+    def add_shared_expense_allocation(
+        self,
+        *,
+        user_profile_id: int,
+        transaction_id: int,
+        counterparty_id: int,
+        personal_share_minor: int,
+        recoverable_share_minor: int,
+        share_ratio_basis_points: int | None,
+        status: SharedExpenseStatus = SharedExpenseStatus.PENDING,
+        decided_by: str = "system",
+        notes: str | None = None,
+    ) -> SharedExpenseAllocation:
+        allocation = SharedExpenseAllocation(
+            user_profile_id=user_profile_id,
+            transaction_id=transaction_id,
+            counterparty_id=counterparty_id,
+            personal_share_minor=personal_share_minor,
+            recoverable_share_minor=recoverable_share_minor,
+            share_ratio_basis_points=share_ratio_basis_points,
+            status=status,
+            decided_by=decided_by,
+            notes=notes,
+        )
+        self.session.add(allocation)
+        return allocation
+
+    def get_shared_expense_allocation_for_transaction(
+        self, *, transaction_id: int, user_profile_id: int
+    ) -> SharedExpenseAllocation | None:
+        statement = select(SharedExpenseAllocation).where(
+            SharedExpenseAllocation.transaction_id == transaction_id,
+            SharedExpenseAllocation.user_profile_id == user_profile_id,
+        )
+        return self.session.scalar(statement)
+
+    def list_shared_expense_allocations_for_profile(
+        self,
+        *,
+        user_profile_id: int,
+        include_waived: bool = False,
+    ) -> list[SharedExpenseAllocation]:
+        statement = select(SharedExpenseAllocation).where(
+            SharedExpenseAllocation.user_profile_id == user_profile_id
+        )
+        if not include_waived:
+            statement = statement.where(
+                SharedExpenseAllocation.status != SharedExpenseStatus.WAIVED
+            )
+        return list(
+            self.session.scalars(
+                statement.order_by(
+                    SharedExpenseAllocation.updated_at.desc(),
+                    SharedExpenseAllocation.id.desc(),
+                )
+            )
+        )
+
+    def add_reimbursement_match(
+        self,
+        *,
+        user_profile_id: int,
+        shared_expense_allocation_id: int,
+        reimbursement_transaction_id: int,
+        matched_amount_minor: int,
+        status: ReimbursementMatchStatus = ReimbursementMatchStatus.SUGGESTED,
+        confidence: Decimal = Decimal("1.0000"),
+        decided_by: str = "system",
+        notes: str | None = None,
+    ) -> ReimbursementMatch:
+        reimbursement_match = ReimbursementMatch(
+            user_profile_id=user_profile_id,
+            shared_expense_allocation_id=shared_expense_allocation_id,
+            reimbursement_transaction_id=reimbursement_transaction_id,
+            matched_amount_minor=matched_amount_minor,
+            status=status,
+            confidence=confidence,
+            decided_by=decided_by,
+            notes=notes,
+        )
+        self.session.add(reimbursement_match)
+        return reimbursement_match
+
+    def get_reimbursement_match(
+        self,
+        *,
+        reimbursement_match_id: int,
+        user_profile_id: int,
+    ) -> ReimbursementMatch | None:
+        statement = select(ReimbursementMatch).where(
+            ReimbursementMatch.id == reimbursement_match_id,
+            ReimbursementMatch.user_profile_id == user_profile_id,
+        )
+        return self.session.scalar(statement)
+
+    def get_reimbursement_match_for_pair(
+        self,
+        *,
+        user_profile_id: int,
+        shared_expense_allocation_id: int,
+        reimbursement_transaction_id: int,
+    ) -> ReimbursementMatch | None:
+        statement = select(ReimbursementMatch).where(
+            ReimbursementMatch.user_profile_id == user_profile_id,
+            ReimbursementMatch.shared_expense_allocation_id == shared_expense_allocation_id,
+            ReimbursementMatch.reimbursement_transaction_id == reimbursement_transaction_id,
+        )
+        return self.session.scalar(statement)
+
+    def get_confirmed_reimbursement_match_for_transaction(
+        self,
+        *,
+        user_profile_id: int,
+        reimbursement_transaction_id: int,
+    ) -> ReimbursementMatch | None:
+        statement = select(ReimbursementMatch).where(
+            ReimbursementMatch.user_profile_id == user_profile_id,
+            ReimbursementMatch.reimbursement_transaction_id == reimbursement_transaction_id,
+            ReimbursementMatch.status == ReimbursementMatchStatus.CONFIRMED,
+        )
+        return self.session.scalar(statement.order_by(ReimbursementMatch.id))
+
+    def list_reimbursement_matches_for_profile(
+        self,
+        *,
+        user_profile_id: int,
+        statuses: list[ReimbursementMatchStatus] | None = None,
+    ) -> list[ReimbursementMatch]:
+        statement = select(ReimbursementMatch).where(
+            ReimbursementMatch.user_profile_id == user_profile_id
+        )
+        if statuses is not None:
+            statement = statement.where(ReimbursementMatch.status.in_(statuses))
+        return list(
+            self.session.scalars(
+                statement.order_by(
+                    ReimbursementMatch.updated_at.desc(),
+                    ReimbursementMatch.id.desc(),
+                )
+            )
+        )
+
     def list_transactions(
         self,
         *,
@@ -499,6 +700,104 @@ class AccountingRepository:
         )
         self.session.add(decision)
         return decision
+
+    def add_classification_rule(
+        self,
+        *,
+        user_profile_id: int,
+        name: str,
+        rule_type: ClassificationRuleType,
+        match_field: ClassificationMatchField,
+        pattern: str,
+        category_id: int | None = None,
+        transaction_type: TransactionType | None = None,
+        payment_method: PaymentMethod | None = None,
+        direction: Direction | None = None,
+        amount_min_minor: int | None = None,
+        amount_max_minor: int | None = None,
+        priority: int = 100,
+        confidence: Decimal = Decimal("1.0000"),
+        auto_apply: bool = False,
+        is_active: bool = True,
+    ) -> ClassificationRule:
+        classification_rule = ClassificationRule(
+            user_profile_id=user_profile_id,
+            name=name,
+            rule_type=rule_type,
+            match_field=match_field,
+            pattern=pattern,
+            category_id=category_id,
+            transaction_type=transaction_type,
+            payment_method=payment_method,
+            direction=direction,
+            amount_min_minor=amount_min_minor,
+            amount_max_minor=amount_max_minor,
+            priority=priority,
+            confidence=confidence,
+            auto_apply=auto_apply,
+            is_active=is_active,
+        )
+        self.session.add(classification_rule)
+        return classification_rule
+
+    def list_classification_rules(
+        self,
+        *,
+        user_profile_id: int,
+        include_inactive: bool = False,
+    ) -> list[ClassificationRule]:
+        statement = select(ClassificationRule).where(
+            ClassificationRule.user_profile_id == user_profile_id
+        ).options(joinedload(ClassificationRule.category))
+        if not include_inactive:
+            statement = statement.where(ClassificationRule.is_active.is_(True))
+        return list(
+            self.session.scalars(
+                statement.order_by(
+                    ClassificationRule.priority,
+                    ClassificationRule.name,
+                    ClassificationRule.id,
+                )
+            )
+        )
+
+    def get_classification_rule(
+        self,
+        *,
+        classification_rule_id: int,
+        user_profile_id: int,
+    ) -> ClassificationRule | None:
+        return self.session.scalar(
+            select(ClassificationRule)
+            .where(
+                ClassificationRule.id == classification_rule_id,
+                ClassificationRule.user_profile_id == user_profile_id,
+            )
+            .options(joinedload(ClassificationRule.category))
+        )
+
+    def unlink_classification_decisions_from_rule(
+        self,
+        *,
+        classification_rule_id: int,
+        user_profile_id: int,
+    ) -> int:
+        statement = (
+            select(ClassificationDecision)
+            .join(Transaction)
+            .where(
+                ClassificationDecision.classification_rule_id
+                == classification_rule_id,
+                Transaction.user_profile_id == user_profile_id,
+            )
+        )
+        decisions = list(self.session.scalars(statement))
+        for decision in decisions:
+            decision.classification_rule_id = None
+        return len(decisions)
+
+    def delete_classification_rule(self, classification_rule: ClassificationRule) -> None:
+        self.session.delete(classification_rule)
 
     def list_classification_decisions(
         self, *, transaction_id: int, user_profile_id: int

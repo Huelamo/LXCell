@@ -73,6 +73,19 @@ class TransactionSourceType(StrEnum):
     OTHER = "other"
 
 
+class SharedExpenseStatus(StrEnum):
+    PENDING = "pending"
+    PARTIALLY_REIMBURSED = "partially_reimbursed"
+    REIMBURSED = "reimbursed"
+    WAIVED = "waived"
+
+
+class ReimbursementMatchStatus(StrEnum):
+    SUGGESTED = "suggested"
+    CONFIRMED = "confirmed"
+    REJECTED = "rejected"
+
+
 class ImportSourceSystem(StrEnum):
     MANUAL_ENTRY = "manual_entry"
     BANK_CSV = "bank_csv"

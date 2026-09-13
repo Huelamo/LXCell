@@ -11,7 +11,8 @@ such as `Bank A`, `Card A`, `Merchant A`, and `Sample User`.
 
 ## Review Status
 
-Status: first confirmed PDF import implemented.
+Status: first confirmed PDF import, conservative deterministic classification,
+and post-import classification review implemented.
 
 Accepted:
 
@@ -47,6 +48,27 @@ Implemented:
 - The local Streamlit `Importar` tab exposes the confirmed PDF save action after
   preview, with normal confirmation plus an optional protected-period override
   that requires typing an exact confirmation text.
+- Confirmed PDF imports run active deterministic classification rules against
+  each created transaction. High-confidence non-conflicting rules can assign
+  category/type/payment method while keeping the row pending review; useful
+  lower-confidence rules are recorded as suggestions only.
+- Confirmed PDF imports infer obvious payment methods from statement text,
+  including card markers and supported peer-to-peer payment app markers.
+- The local Streamlit `Transacciones` tab includes a post-import review queue
+  for pending imported transactions. The user can accept or correct category,
+  transaction type, and payment method one transaction at a time, and each
+  review creates an accepted manual classification decision.
+- The post-import review form preselects `card` when the transaction text
+  indicates a card payment and can explicitly create a reusable deterministic
+  rule from the reviewed transaction for future imports.
+- Existing deterministic classification rules can be edited, deactivated, and
+  reactivated from the local configuration UI.
+- Rules that accidentally contain sensitive imported description text can be
+  hard-deleted from the local configuration UI after typing an explicit
+  confirmation phrase; linked classification decisions are preserved without
+  the deleted rule reference.
+- Shared-expense reimbursement suggestions can link incoming statement
+  transactions to pending shared-expense allocations after user review.
 - Tests generate synthetic anonymized PDFs at runtime; no real statement file is
   committed.
 
@@ -330,6 +352,11 @@ The first implementation PR should be blocked by tests for:
 - leaving uncertain rows uncategorized with pending review;
 - preserving existing classification decisions when user corrections supersede
   them;
+- confirming or correcting pending imported classifications through the review
+  queue;
+- learning an explicit deterministic rule from a reviewed imported transaction;
+- re-applying a newly learned deterministic rule to other pending imported
+  transactions;
 - using synthetic/anonymized fixtures only.
 
 ## First Implementation Slice
@@ -342,7 +369,8 @@ Recommended first slice:
 4. Add duplicate checks against existing import batches and source rows.
    Done for file-hash and exact normalized row-hash checks in confirmed imports.
 5. Add confirmed database writes from reviewed previews. Done.
-6. Add deterministic classification suggestions. Deferred.
+6. Add deterministic classification suggestions. Done for active
+   `ClassificationRule` rows; repeated-history learning remains future work.
 
 This mirrors the historical Excel approach and keeps the first bank-statement
 PR small enough to review.

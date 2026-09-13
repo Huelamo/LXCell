@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 
 from lxcell.db.models import Account, ImportedTransactionSource
@@ -25,6 +26,9 @@ from lxcell.importers import (
 )
 from lxcell.repositories import AccountingRepository
 from lxcell.services.accounting_service import protected_transaction_dates
+from lxcell.services.deterministic_classification_service import (
+    DeterministicClassificationService,
+)
 
 
 @dataclass(frozen=True)
@@ -177,7 +181,10 @@ class StatementPdfImportService:
                 currency=candidate.currency or account.currency,
                 direction=candidate.direction,
                 transaction_type=transaction_type_for_statement_candidate(candidate),
-                payment_method=payment_method_for_statement_source(source_system),
+                payment_method=payment_method_for_statement_candidate(
+                    source_system,
+                    candidate,
+                ),
                 review_status=TransactionReviewStatus.PENDING_REVIEW,
                 source_type=TransactionSourceType.BANK_IMPORT,
                 source_id=normalized_hash,
@@ -190,15 +197,23 @@ class StatementPdfImportService:
                 normalized_hash=normalized_hash,
                 created_transaction_id=transaction.id,
             )
-            self.repository.add_classification_decision(
-                transaction_id=transaction.id,
-                transaction_type=transaction.transaction_type,
-                payment_method=transaction.payment_method,
-                decision_source=ClassificationDecisionSource.IMPORT_DEFAULT,
-                decision_status=ClassificationDecisionStatus.SUGGESTED,
+            classification_result = DeterministicClassificationService(
+                self.repository
+            ).classify_and_record_transaction(
+                user_profile_id=user_profile_id,
+                transaction=transaction,
                 decided_by="system",
-                notes="Statement PDF import default.",
             )
+            if classification_result is None:
+                self.repository.add_classification_decision(
+                    transaction_id=transaction.id,
+                    transaction_type=transaction.transaction_type,
+                    payment_method=transaction.payment_method,
+                    decision_source=ClassificationDecisionSource.IMPORT_DEFAULT,
+                    decision_status=ClassificationDecisionStatus.SUGGESTED,
+                    decided_by="system",
+                    notes="Statement PDF import default.",
+                )
             transaction_count += 1
 
         if ignored_protected_count or matched_existing_count or marked_duplicate_count:
@@ -320,6 +335,26 @@ def payment_method_for_statement_source(
     return None
 
 
+def payment_method_for_statement_candidate(
+    source_system: ImportSourceSystem,
+    candidate: PdfStatementTransactionCandidate,
+) -> PaymentMethod | None:
+    description = f"{candidate.description_clean or ''} {candidate.description_raw or ''}"
+    if description_indicates_peer_to_peer_payment(description):
+        return PaymentMethod.PEER_TO_PEER
+    if description_indicates_card_payment(description):
+        return PaymentMethod.CARD
+    return payment_method_for_statement_source(source_system)
+
+
+def description_indicates_peer_to_peer_payment(description: str) -> bool:
+    return re.search(r"\b(?:tikkie|bizum)\b", description, flags=re.IGNORECASE) is not None
+
+
+def description_indicates_card_payment(description: str) -> bool:
+    return re.search(r"\b(?:tarjeta|card)\b", description, flags=re.IGNORECASE) is not None
+
+
 def record_id_source(candidate: PdfStatementTransactionCandidate) -> str:
     return f"page:{candidate.page_number}:row:{candidate.row_number_source}"
 
@@ -352,6 +387,9 @@ def payload_raw_json(
 __all__ = [
     "StatementPdfImportResult",
     "StatementPdfImportService",
+    "description_indicates_card_payment",
+    "description_indicates_peer_to_peer_payment",
+    "payment_method_for_statement_candidate",
     "payment_method_for_statement_source",
     "transaction_type_for_statement_candidate",
 ]
