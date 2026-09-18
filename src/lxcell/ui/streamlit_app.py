@@ -44,6 +44,7 @@ from lxcell.enums.core_enums import (
     TransactionType,
 )
 from lxcell.importers import HistoricalExcelPreview, PdfStatementPreview
+from lxcell.importers.csv_statement import StatementCsvDryRunImporter
 from lxcell.repositories import AccountingRepository
 from lxcell.services import (
     AccountingService,
@@ -54,16 +55,21 @@ from lxcell.services import (
 )
 from lxcell.services.accounting_service import protected_transaction_dates
 from lxcell.services.historical_excel_import_service import HistoricalExcelImportService
-from lxcell.services.statement_pdf_import_service import StatementPdfImportService
+from lxcell.services.statement_pdf_import_service import (
+    suggested_statement_account,
+)
 
 PENDING_DUPLICATE_TRANSACTION_KEY = "lxcell_pending_duplicate_transaction"
 HISTORICAL_EXCEL_PREVIEW_KEY = "lxcell_historical_excel_preview"
 HISTORICAL_EXCEL_PREVIEW_VERSION = 5
 HISTORICAL_EXCEL_ACCOUNT_NAME = "Excel histórico"
 STATEMENT_PDF_PREVIEW_KEY = "lxcell_statement_pdf_preview"
-STATEMENT_PDF_PREVIEW_VERSION = 1
+STATEMENT_PDF_PREVIEW_VERSION = 2
+STATEMENT_CSV_PREVIEW_KEY = "lxcell_statement_csv_preview"
+STATEMENT_CSV_PREVIEW_VERSION = 1
 STATEMENT_PDF_PROTECTED_IMPORT_CONFIRMATION_TEXT = "IMPORTAR PERIODO PROTEGIDO"
 CLASSIFICATION_RULE_HARD_DELETE_CONFIRMATION_TEXT = "BORRAR REGLAS"
+CREATE_CATEGORY_REVIEW_OPTION = "__create_category__"
 
 
 def run() -> None:
@@ -162,6 +168,20 @@ def render_setup(session_factory, selected_profile_id: int | None) -> None:
         ownership_type = st.selectbox("Titularidad", enum_values(OwnershipType))
         currency = st.text_input("Moneda de la cuenta", value="EUR", max_chars=3)
         institution_name = st.text_input("Entidad")
+        statement_match_hint = st.text_input("Pista para detectar extractos PDF")
+        apply_personal_share = st.checkbox(
+            "Aplicar porcentaje personal en informes",
+            disabled=OwnershipType(ownership_type) != OwnershipType.SHARED,
+        )
+        personal_share_percentage = st.number_input(
+            "Porcentaje personal",
+            min_value=0,
+            max_value=100,
+            value=50,
+            step=1,
+            disabled=not apply_personal_share
+            or OwnershipType(ownership_type) != OwnershipType.SHARED,
+        )
         submitted = st.form_submit_button("Crear cuenta")
         if submitted:
             try:
@@ -174,12 +194,26 @@ def render_setup(session_factory, selected_profile_id: int | None) -> None:
                         institution_name=institution_name or None,
                         currency=currency.upper(),
                         ownership_type=OwnershipType(ownership_type),
+                        statement_match_hint=statement_match_hint or None,
+                        personal_reporting_share_basis_points=(
+                            int(personal_share_percentage) * 100
+                            if apply_personal_share
+                            and OwnershipType(ownership_type) == OwnershipType.SHARED
+                            else None
+                        ),
                     )
                     session.flush()
                     flash_success("setup", f"Cuenta creada: {account.name}")
                 st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
             except IntegrityError as exc:
                 st.warning(friendly_integrity_error_message(exc))
+
+    render_account_setup(
+        session_factory,
+        selected_profile_id=selected_profile_id,
+    )
 
     st.subheader("Contrapartes")
     counterparties = load_counterparties(session_factory, selected_profile_id)
@@ -217,6 +251,48 @@ def render_setup(session_factory, selected_profile_id: int | None) -> None:
         session_factory,
         selected_profile_id=selected_profile_id,
     )
+
+
+def render_account_setup(
+    session_factory,
+    *,
+    selected_profile_id: int,
+) -> None:
+    accounts, _ = load_accounting_lists(
+        session_factory,
+        selected_profile_id,
+        include_inactive=True,
+    )
+    if not accounts:
+        return
+
+    st.caption("Cuentas existentes")
+    edited_rows = st.data_editor(
+        pd.DataFrame(account_editor_rows(accounts)),
+        use_container_width=True,
+        hide_index=True,
+        column_config=account_editor_column_config(),
+        disabled=["id"],
+        key="account_editor",
+    )
+    if st.button("Guardar cuentas"):
+        try:
+            updated_count = apply_account_table_changes(
+                session_factory,
+                user_profile_id=selected_profile_id,
+                original_accounts=accounts,
+                edited_rows=edited_rows.to_dict("records"),
+            )
+        except ValueError as exc:
+            st.error(str(exc))
+            return
+        except IntegrityError as exc:
+            st.warning(friendly_integrity_error_message(exc))
+            return
+        if updated_count:
+            flash_success("setup", account_table_success_message(updated_count))
+            st.rerun()
+        st.info("No hay cambios que guardar.")
 
 
 def render_classification_rule_setup(
@@ -740,7 +816,15 @@ def render_imported_transaction_review_queue(
     )
 
     active_categories = [category for category in categories if category.is_active]
-    category_options = [None] + [category.id for category in active_categories]
+    active_category_by_id = {category.id: category for category in active_categories}
+    active_counterparties = load_counterparties(
+        session_factory,
+        selected_profile_id,
+        include_inactive=False,
+    )
+    category_options = [None] + [
+        category.id for category in active_categories
+    ] + [CREATE_CATEGORY_REVIEW_OPTION]
     suggested_category_id = (
         selected_transaction.category_id
         if selected_transaction.category_id in category_options
@@ -756,13 +840,17 @@ def render_imported_transaction_review_queue(
         key=f"classification_review_locked_period_override_{selected_transaction_id}",
     )
 
+    category_id = st.selectbox(
+        "Categoría revisada",
+        options=category_options,
+        index=category_options.index(suggested_category_id),
+        format_func=lambda option: category_review_option_label(
+            option, category_labels
+        ),
+        key=f"classification_review_category_id_{selected_transaction_id}",
+    )
+
     with st.form(f"classification_review_{selected_transaction_id}"):
-        category_id = st.selectbox(
-            "Categoría revisada",
-            options=category_options,
-            index=category_options.index(suggested_category_id),
-            format_func=category_labels.get,
-        )
         transaction_type = st.selectbox(
             "Tipo revisado",
             options=enum_values(TransactionType),
@@ -770,6 +858,32 @@ def render_imported_transaction_review_queue(
                 selected_transaction.transaction_type.value
             ),
         )
+        review_type = TransactionType(transaction_type)
+        new_category_name = None
+        new_category_type = None
+        selected_category = active_category_by_id.get(category_id)
+        selected_category_id = category_id if isinstance(category_id, int) else None
+        if category_id == CREATE_CATEGORY_REVIEW_OPTION:
+            new_category_name = st.text_input("Nombre de la nueva categoría")
+            default_category_type = default_category_type_for_transaction_type(
+                review_type
+            )
+            new_category_type_value = st.selectbox(
+                "Tipo de la nueva categoría",
+                options=enum_values(CategoryType),
+                index=enum_values(CategoryType).index(default_category_type.value),
+            )
+            new_category_type = CategoryType(new_category_type_value)
+            selected_category = Category(
+                name=new_category_name or "Nueva categoría",
+                category_type=new_category_type,
+            )
+        type_mismatch_message = transaction_review_type_mismatch_message(
+            category=selected_category,
+            transaction_type=review_type,
+        )
+        if type_mismatch_message is not None:
+            st.warning(type_mismatch_message)
         payment_method_options = [None] + list(PaymentMethod)
         suggested_payment_method = suggested_payment_method_for_review(
             selected_transaction
@@ -782,6 +896,27 @@ def render_imported_transaction_review_queue(
             if method is None
             else method.value,
         )
+        can_mark_shared = (
+            selected_transaction.direction == Direction.OUTFLOW
+            and selected_transaction.amount_minor > 0
+        )
+        mark_shared_50_50 = st.checkbox(
+            "Marcar como gasto compartido 50/50",
+            value=False,
+            disabled=not can_mark_shared or not active_counterparties,
+        )
+        shared_counterparty_id = None
+        if mark_shared_50_50:
+            shared_counterparty_id = st.selectbox(
+                "Contraparte del gasto compartido",
+                options=[counterparty.id for counterparty in active_counterparties],
+                format_func={
+                    counterparty.id: counterparty.display_name
+                    for counterparty in active_counterparties
+                }.get,
+            )
+        elif can_mark_shared and not active_counterparties:
+            st.caption("Crea una contraparte en Configuración para marcar gastos compartidos.")
         suggested_rule_pattern = suggested_classification_rule_pattern(
             selected_transaction
         )
@@ -796,6 +931,9 @@ def render_imported_transaction_review_queue(
         decided_by = st.text_input("Revisado por", value="local_ui")
         submitted = st.form_submit_button("Confirmar revisión", type="primary")
         if submitted:
+            if type_mismatch_message is not None:
+                st.error(type_mismatch_message)
+                return
             try:
                 (
                     decision_id,
@@ -805,17 +943,21 @@ def render_imported_transaction_review_queue(
                     session_factory,
                     user_profile_id=selected_profile_id,
                     transaction_id=selected_transaction_id,
-                    category_id=category_id,
-                    transaction_type=TransactionType(transaction_type),
+                    category_id=selected_category_id,
+                    transaction_type=review_type,
                     payment_method=payment_method,
                     decided_by=decided_by,
                     allow_locked_period_override=locked_period_override,
                     create_learned_rule=create_and_auto_apply_learned_rule,
                     learned_rule_pattern=learned_rule_pattern,
                     learned_rule_auto_apply=True,
+                    new_category_name=new_category_name,
+                    new_category_type=new_category_type,
+                    mark_shared_50_50=mark_shared_50_50,
+                    shared_counterparty_id=shared_counterparty_id,
                 )
             except ValueError as exc:
-                st.error(str(exc))
+                st.error(user_facing_review_error_message(exc))
                 return
             message = f"Revisión confirmada: decisión {decision_id}"
             if learned_rule_id is not None:
@@ -1209,6 +1351,8 @@ def render_import_preview(session_factory, selected_profile_id: int | None) -> N
         st.info("Selecciona un perfil para previsualizar importaciones.")
         return
 
+    render_statement_csv_preview(session_factory, selected_profile_id)
+    st.divider()
     render_statement_pdf_preview(session_factory, selected_profile_id)
     st.divider()
 
@@ -1251,6 +1395,94 @@ def render_import_preview(session_factory, selected_profile_id: int | None) -> N
         st.info("La previsualización anterior ha caducado. Pulsa de nuevo Previsualizar Excel.")
 
 
+def render_statement_csv_preview(session_factory, selected_profile_id: int) -> None:
+    st.subheader("Importar extracto CSV")
+    render_flash_success("statement_csv_import")
+
+    accounts, _ = load_accounting_lists(
+        session_factory,
+        selected_profile_id,
+        include_inactive=False,
+    )
+    statement_accounts = [
+        account for account in accounts if account.name != HISTORICAL_EXCEL_ACCOUNT_NAME
+    ]
+    if not statement_accounts:
+        st.info("Añade una cuenta bancaria activa antes de previsualizar extractos.")
+        st.session_state.pop(STATEMENT_CSV_PREVIEW_KEY, None)
+        return
+
+    account_labels = {account.id: account.name for account in statement_accounts}
+    account_id = st.selectbox(
+        "Cuenta del extracto CSV",
+        options=[account.id for account in statement_accounts],
+        format_func=account_labels.get,
+        key="statement_csv_account_id",
+    )
+    source_system = st.selectbox(
+        "Tipo de extracto CSV",
+        options=[ImportSourceSystem.BANK_CSV.value, ImportSourceSystem.CARD_CSV.value],
+        format_func={
+            ImportSourceSystem.BANK_CSV.value: "Cuenta bancaria CSV",
+            ImportSourceSystem.CARD_CSV.value: "Tarjeta CSV",
+        }.get,
+        key="statement_csv_source_system",
+    )
+    uploaded_file = st.file_uploader(
+        "Archivo CSV",
+        type=["csv"],
+        key="statement_csv_file",
+    )
+
+    if uploaded_file is None:
+        st.session_state.pop(STATEMENT_CSV_PREVIEW_KEY, None)
+        return
+
+    upload_signature = uploaded_statement_file_signature(
+        uploaded_file,
+        source_system=source_system,
+    )
+    if st.button("Previsualizar CSV", type="primary"):
+        try:
+            preview = preview_uploaded_statement_csv(uploaded_file)
+        except ValueError as exc:
+            st.error(str(exc))
+            return
+        st.session_state[STATEMENT_CSV_PREVIEW_KEY] = {
+            "preview": preview,
+            "signature": upload_signature,
+            "version": STATEMENT_CSV_PREVIEW_VERSION,
+        }
+
+    stored_preview = st.session_state.get(STATEMENT_CSV_PREVIEW_KEY)
+    if stored_statement_csv_preview_matches(stored_preview, upload_signature):
+        preview = stored_preview["preview"]
+        account_suggestion = suggested_statement_account(
+            preview=preview,
+            accounts=statement_accounts,
+        )
+        render_statement_preview_results(
+            session_factory,
+            user_profile_id=selected_profile_id,
+            account_id=account_id,
+            account_label=account_labels[account_id],
+            account=next(
+                account for account in statement_accounts if account.id == account_id
+            ),
+            account_suggestion=account_suggestion,
+            source_system=ImportSourceSystem(source_system),
+            preview=preview,
+            flash_key="statement_csv_import",
+            preview_key=STATEMENT_CSV_PREVIEW_KEY,
+        )
+    elif stored_preview is not None:
+        st.session_state.pop(STATEMENT_CSV_PREVIEW_KEY, None)
+        st.info(
+            "La previsualización anterior ha caducado. "
+            "Pulsa de nuevo Previsualizar CSV."
+        )
+
+
 def render_statement_pdf_preview(session_factory, selected_profile_id: int) -> None:
     st.subheader("Importar extracto PDF")
     render_flash_success("statement_pdf_import")
@@ -1260,15 +1492,18 @@ def render_statement_pdf_preview(session_factory, selected_profile_id: int) -> N
         selected_profile_id,
         include_inactive=False,
     )
-    if not accounts:
-        st.info("Añade una cuenta activa antes de previsualizar extractos.")
+    statement_accounts = [
+        account for account in accounts if account.name != HISTORICAL_EXCEL_ACCOUNT_NAME
+    ]
+    if not statement_accounts:
+        st.info("Añade una cuenta bancaria activa antes de previsualizar extractos.")
         st.session_state.pop(STATEMENT_PDF_PREVIEW_KEY, None)
         return
 
-    account_labels = {account.id: account.name for account in accounts}
+    account_labels = {account.id: account.name for account in statement_accounts}
     account_id = st.selectbox(
         "Cuenta del extracto",
-        options=[account.id for account in accounts],
+        options=[account.id for account in statement_accounts],
         format_func=account_labels.get,
         key="statement_pdf_account_id",
     )
@@ -1291,9 +1526,8 @@ def render_statement_pdf_preview(session_factory, selected_profile_id: int) -> N
         st.session_state.pop(STATEMENT_PDF_PREVIEW_KEY, None)
         return
 
-    upload_signature = uploaded_statement_pdf_signature(
+    upload_signature = uploaded_statement_file_signature(
         uploaded_file,
-        account_id=account_id,
         source_system=source_system,
     )
     if st.button("Previsualizar extracto", type="primary"):
@@ -1311,13 +1545,23 @@ def render_statement_pdf_preview(session_factory, selected_profile_id: int) -> N
     stored_preview = st.session_state.get(STATEMENT_PDF_PREVIEW_KEY)
     if stored_statement_pdf_preview_matches(stored_preview, upload_signature):
         preview = stored_preview["preview"]
-        render_statement_pdf_preview_results(
+        account_suggestion = suggested_statement_account(
+            preview=preview,
+            accounts=statement_accounts,
+        )
+        render_statement_preview_results(
             session_factory,
             user_profile_id=selected_profile_id,
             account_id=account_id,
             account_label=account_labels[account_id],
+            account=next(
+                account for account in statement_accounts if account.id == account_id
+            ),
+            account_suggestion=account_suggestion,
             source_system=ImportSourceSystem(source_system),
             preview=preview,
+            flash_key="statement_pdf_import",
+            preview_key=STATEMENT_PDF_PREVIEW_KEY,
         )
     elif stored_preview is not None:
         st.session_state.pop(STATEMENT_PDF_PREVIEW_KEY, None)
@@ -1340,24 +1584,47 @@ def preview_uploaded_statement_pdf(uploaded_file):
         temporary_path.unlink(missing_ok=True)
 
 
-def uploaded_statement_pdf_signature(
+def preview_uploaded_statement_csv(uploaded_file):
+    with NamedTemporaryFile(delete=False, suffix=".csv") as temporary_file:
+        temporary_path = Path(temporary_file.name)
+        temporary_file.write(uploaded_file.getbuffer())
+
+    try:
+        return StatementCsvDryRunImporter().preview(temporary_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def uploaded_statement_file_signature(
     uploaded_file,
     *,
-    account_id: int,
     source_system: str,
-) -> tuple[str, int, str, str]:
+) -> tuple[str, str, str]:
     digest = hashlib.sha256(uploaded_file.getbuffer()).hexdigest()
-    return uploaded_file.name, account_id, source_system, digest
+    return uploaded_file.name, source_system, digest
 
 
 def stored_statement_pdf_preview_matches(
     stored_preview,
-    upload_signature: tuple[str, int, str, str],
+    upload_signature: tuple[str, str, str],
 ) -> bool:
     preview = stored_preview.get("preview") if isinstance(stored_preview, dict) else None
     return (
         isinstance(stored_preview, dict)
         and stored_preview.get("version") == STATEMENT_PDF_PREVIEW_VERSION
+        and stored_preview.get("signature") == upload_signature
+        and statement_pdf_preview_can_render(preview)
+    )
+
+
+def stored_statement_csv_preview_matches(
+    stored_preview,
+    upload_signature: tuple[str, str, str],
+) -> bool:
+    preview = stored_preview.get("preview") if isinstance(stored_preview, dict) else None
+    return (
+        isinstance(stored_preview, dict)
+        and stored_preview.get("version") == STATEMENT_CSV_PREVIEW_VERSION
         and stored_preview.get("signature") == upload_signature
         and statement_pdf_preview_can_render(preview)
     )
@@ -1373,14 +1640,18 @@ def statement_pdf_preview_can_render(preview) -> bool:
     )
 
 
-def render_statement_pdf_preview_results(
+def render_statement_preview_results(
     session_factory,
     *,
     user_profile_id: int,
     account_id: int,
     account_label: str,
+    account,
+    account_suggestion,
     source_system: ImportSourceSystem,
     preview: PdfStatementPreview,
+    flash_key: str,
+    preview_key: str,
 ) -> None:
     st.success("Extracto leído en modo previsualización. No se ha guardado nada.")
 
@@ -1393,6 +1664,13 @@ def render_statement_pdf_preview_results(
     )
     if duplicate_batch is not None:
         st.warning("Este archivo ya fue importado correctamente para esta cuenta.")
+    if account_suggestion is not None and account_suggestion.id == account_id:
+        st.success(f"Cuenta detectada automáticamente: {account_suggestion.name}.")
+    elif account_suggestion is not None:
+        st.warning(
+            "El archivo parece corresponder a "
+            f"{account_suggestion.name}, pero has seleccionado {account_label}."
+        )
 
     locked_until = statement_pdf_locked_until(
         session_factory,
@@ -1411,6 +1689,12 @@ def render_statement_pdf_preview_results(
         st.info(
             "Los movimientos en periodo protegido requerirán permiso adicional "
             "o se ignorarán en la importación confirmada."
+        )
+    if account.personal_reporting_share_basis_points is not None:
+        personal_share_percentage = account.personal_reporting_share_basis_points // 100
+        st.info(
+            "Esta cuenta aplica una base personal del "
+            f"{personal_share_percentage}% en informes personales para sus gastos."
         )
 
     st.caption(
@@ -1446,6 +1730,8 @@ def render_statement_pdf_preview_results(
         preview=preview,
         duplicate_batch=duplicate_batch,
         protected_count=protected_count,
+        flash_key=flash_key,
+        preview_key=preview_key,
     )
 
 
@@ -1458,6 +1744,8 @@ def render_statement_pdf_import_confirmation(
     preview: PdfStatementPreview,
     duplicate_batch,
     protected_count: int,
+    flash_key: str = "statement_pdf_import",
+    preview_key: str = STATEMENT_PDF_PREVIEW_KEY,
 ) -> None:
     st.subheader("Guardar extracto")
     if duplicate_batch is not None:
@@ -1535,9 +1823,9 @@ def render_statement_pdf_import_confirmation(
         st.error(str(exc))
         return
 
-    st.session_state.pop(STATEMENT_PDF_PREVIEW_KEY, None)
+    st.session_state.pop(preview_key, None)
     flash_success(
-        "statement_pdf_import",
+        flash_key,
         statement_pdf_import_success_message(result),
     )
     st.rerun()
@@ -1555,7 +1843,11 @@ def confirm_statement_pdf_import_from_preview(
     allow_locked_period_override: bool = False,
 ):
     with session_scope(session_factory) as session:
-        service = StatementPdfImportService(AccountingRepository(session))
+        service_module = importlib.import_module(
+            "lxcell.services.statement_pdf_import_service"
+        )
+        service_module = importlib.reload(service_module)
+        service = service_module.StatementPdfImportService(AccountingRepository(session))
         result = service.confirm_import(
             user_profile_id=user_profile_id,
             account_id=account_id,
@@ -3401,6 +3693,148 @@ def classification_rule_table_rows(rules: list[ClassificationRule]) -> list[dict
     ]
 
 
+def account_editor_rows(accounts) -> list[dict]:
+    return [
+        {
+            "id": account.id,
+            "nombre": account.name,
+            "tipo": account.account_type.value,
+            "titularidad": account.ownership_type.value,
+            "moneda": account.currency,
+            "entidad": account.institution_name or "",
+            "pista extracto": account.statement_match_hint or "",
+            "porcentaje personal": account_personal_share_percentage(account),
+            "activa": account.is_active,
+        }
+        for account in accounts
+    ]
+
+
+def account_editor_column_config() -> dict:
+    return {
+        "id": st.column_config.NumberColumn("id"),
+        "nombre": st.column_config.TextColumn("nombre", required=True),
+        "tipo": st.column_config.SelectboxColumn(
+            "tipo",
+            options=enum_values(AccountType),
+            required=True,
+        ),
+        "titularidad": st.column_config.SelectboxColumn(
+            "titularidad",
+            options=enum_values(OwnershipType),
+            required=True,
+        ),
+        "moneda": st.column_config.TextColumn("moneda", max_chars=3, required=True),
+        "entidad": st.column_config.TextColumn("entidad"),
+        "pista extracto": st.column_config.TextColumn("pista extracto"),
+        "porcentaje personal": st.column_config.NumberColumn(
+            "porcentaje personal",
+            min_value=0,
+            max_value=100,
+            step=1,
+        ),
+        "activa": st.column_config.CheckboxColumn("activa"),
+    }
+
+
+def apply_account_table_changes(
+    session_factory,
+    *,
+    user_profile_id: int,
+    original_accounts,
+    edited_rows: list[dict],
+) -> int:
+    original_by_id = {account.id: account for account in original_accounts}
+    updated_count = 0
+    with session_scope(session_factory) as session:
+        service = AccountingService(AccountingRepository(session))
+        for row in edited_rows:
+            account_id = int(row["id"])
+            account = original_by_id[account_id]
+            payload = edited_account_payload(row)
+            if not account_row_changed(account, payload):
+                continue
+            service.update_account(
+                user_profile_id=user_profile_id,
+                account_id=account_id,
+                name=payload["name"],
+                account_type=payload["account_type"],
+                institution_name=payload["institution_name"],
+                currency=payload["currency"],
+                ownership_type=payload["ownership_type"],
+                external_account_ref=account.external_account_ref,
+                statement_match_hint=payload["statement_match_hint"],
+                personal_reporting_share_basis_points=payload[
+                    "personal_reporting_share_basis_points"
+                ],
+                is_active=payload["is_active"],
+            )
+            updated_count += 1
+    return updated_count
+
+
+def edited_account_payload(row: dict) -> dict:
+    ownership_type = OwnershipType(
+        required_text(row.get("titularidad"), "La cuenta necesita titularidad.")
+    )
+    personal_share_basis_points = account_personal_share_basis_points_from_row(
+        row,
+        ownership_type=ownership_type,
+    )
+    return {
+        "name": required_text(row.get("nombre"), "La cuenta necesita nombre."),
+        "account_type": AccountType(required_text(row.get("tipo"), "La cuenta necesita tipo.")),
+        "ownership_type": ownership_type,
+        "currency": required_text(row.get("moneda"), "La cuenta necesita moneda.").upper(),
+        "institution_name": normalized_optional_text(row.get("entidad")),
+        "statement_match_hint": normalized_optional_text(row.get("pista extracto")),
+        "personal_reporting_share_basis_points": personal_share_basis_points,
+        "is_active": bool(row.get("activa")),
+    }
+
+
+def account_personal_share_basis_points_from_row(
+    row: dict,
+    *,
+    ownership_type: OwnershipType,
+) -> int | None:
+    raw_percentage = row.get("porcentaje personal")
+    if raw_percentage is None or pd.isna(raw_percentage):
+        return None
+    if isinstance(raw_percentage, str) and not raw_percentage.strip():
+        return None
+    percentage = int(raw_percentage)
+    if ownership_type != OwnershipType.SHARED:
+        return None
+    return percentage * 100
+
+
+def account_row_changed(account, payload: dict) -> bool:
+    return (
+        account.name != payload["name"]
+        or account.account_type != payload["account_type"]
+        or account.ownership_type != payload["ownership_type"]
+        or account.currency != payload["currency"]
+        or (account.institution_name or None) != payload["institution_name"]
+        or (account.statement_match_hint or None) != payload["statement_match_hint"]
+        or account.personal_reporting_share_basis_points
+        != payload["personal_reporting_share_basis_points"]
+        or account.is_active != payload["is_active"]
+    )
+
+
+def account_personal_share_percentage(account) -> int | None:
+    if account.personal_reporting_share_basis_points is None:
+        return None
+    return account.personal_reporting_share_basis_points // 100
+
+
+def account_table_success_message(updated_count: int) -> str:
+    if updated_count == 1:
+        return "1 cuenta actualizada."
+    return f"{updated_count} cuentas actualizadas."
+
+
 def classification_rule_editor_rows(
     rules: list[ClassificationRule],
     *,
@@ -3815,6 +4249,93 @@ def ui_category_type_matches_transaction_type(
     return False
 
 
+def category_review_option_label(
+    option: int | str | None,
+    category_labels: dict[int | None, str],
+) -> str:
+    if option == CREATE_CATEGORY_REVIEW_OPTION:
+        return "Crear nueva categoría..."
+    return category_labels.get(option, "Sin categoría")
+
+
+def transaction_review_type_mismatch_message(
+    *,
+    category: Category | None,
+    transaction_type: TransactionType,
+) -> str | None:
+    if category is None or ui_category_type_matches_transaction_type(
+        category.category_type,
+        transaction_type,
+    ):
+        return None
+    expected_type = expected_transaction_type_for_category_type(
+        category.category_type
+    )
+    expected_text = (
+        f" Cambia el tipo revisado a `{expected_type.value}`."
+        if expected_type is not None
+        else ""
+    )
+    return (
+        f"La categoría `{category.name}` es de tipo `{category.category_type.value}` "
+        f"y no es compatible con el tipo `{transaction_type.value}`."
+        f"{expected_text}"
+    )
+
+
+def expected_transaction_type_for_category_type(
+    category_type: CategoryType,
+) -> TransactionType | None:
+    if category_type == CategoryType.INCOME:
+        return TransactionType.INCOME
+    if category_type == CategoryType.EXPENSE:
+        return TransactionType.EXPENSE
+    if category_type == CategoryType.TRANSFER:
+        return TransactionType.TRANSFER
+    if category_type == CategoryType.ADJUSTMENT:
+        return TransactionType.ADJUSTMENT
+    if category_type == CategoryType.SAVING:
+        return TransactionType.SAVING
+    if category_type == CategoryType.INVESTMENT:
+        return TransactionType.INVESTMENT
+    if category_type == CategoryType.DEBT:
+        return TransactionType.DEBT_PAYMENT
+    return None
+
+
+def default_category_type_for_transaction_type(
+    transaction_type: TransactionType,
+) -> CategoryType:
+    if transaction_type == TransactionType.INCOME:
+        return CategoryType.INCOME
+    if transaction_type in {
+        TransactionType.EXPENSE,
+        TransactionType.FEE,
+        TransactionType.TAX,
+        TransactionType.REFUND,
+    }:
+        return CategoryType.EXPENSE
+    if transaction_type == TransactionType.TRANSFER:
+        return CategoryType.TRANSFER
+    if transaction_type == TransactionType.SAVING:
+        return CategoryType.SAVING
+    if transaction_type == TransactionType.INVESTMENT:
+        return CategoryType.INVESTMENT
+    if transaction_type == TransactionType.DEBT_PAYMENT:
+        return CategoryType.DEBT
+    return CategoryType.ADJUSTMENT
+
+
+def user_facing_review_error_message(error: ValueError) -> str:
+    message = str(error)
+    if "Transaction review category and transaction type are incompatible" in message:
+        return (
+            "La categoría revisada y el tipo revisado no son compatibles. "
+            "Para una transferencia interna usa el tipo `transfer`."
+        )
+    return message
+
+
 def normalized_optional_text(value) -> str | None:
     if value is None or pd.isna(value):
         return None
@@ -3957,9 +4478,33 @@ def confirm_imported_transaction_review_from_ui(
     create_learned_rule: bool = False,
     learned_rule_pattern: str | None = None,
     learned_rule_auto_apply: bool = True,
+    new_category_name: str | None = None,
+    new_category_type: CategoryType | None = None,
+    mark_shared_50_50: bool = False,
+    shared_counterparty_id: int | None = None,
 ) -> tuple[int, int | None, int]:
     with session_scope(session_factory) as session:
         service = AccountingService(AccountingRepository(session))
+        if new_category_name is not None or new_category_type is not None:
+            if category_id is not None:
+                raise ValueError(
+                    "No se puede crear una categoría nueva y usar otra existente."
+                )
+            if new_category_type is None:
+                raise ValueError("Selecciona el tipo de la nueva categoría.")
+            clean_category_name = (new_category_name or "").strip()
+            if not clean_category_name:
+                raise ValueError("Introduce el nombre de la nueva categoría.")
+            category = service.create_category(
+                user_profile_id=user_profile_id,
+                name=clean_category_name,
+                category_type=new_category_type,
+                canonical_key=canonical_key_from_name(clean_category_name),
+                display_order=0,
+            )
+            session.flush()
+            category_id = category.id
+
         decision = service.confirm_transaction_classification(
             user_profile_id=user_profile_id,
             transaction_id=transaction_id,
@@ -3970,6 +4515,16 @@ def confirm_imported_transaction_review_from_ui(
             notes="Imported transaction review.",
             allow_locked_period_override=allow_locked_period_override,
         )
+        if mark_shared_50_50:
+            if shared_counterparty_id is None:
+                raise ValueError("Selecciona una contraparte para el gasto compartido.")
+            service.mark_transaction_shared_50_50(
+                user_profile_id=user_profile_id,
+                transaction_id=transaction_id,
+                counterparty_id=shared_counterparty_id,
+                decided_by=decided_by,
+                allow_locked_period_override=allow_locked_period_override,
+            )
         session.flush()
 
         learned_rule_id = None

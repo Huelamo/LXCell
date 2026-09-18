@@ -9,6 +9,7 @@ from lxcell.enums.core_enums import (
     BudgetPeriodType,
     CategoryType,
     Direction,
+    OwnershipType,
     TransactionReviewStatus,
     TransactionSourceType,
     TransactionType,
@@ -106,6 +107,15 @@ def test_cashflow_summary_respects_direction_and_net_amount(session_factory):
             transaction_type=TransactionType.ADJUSTMENT,
             source_type=TransactionSourceType.MANUAL,
         )
+        repository.add_transaction(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            transaction_date=date(2026, 1, 8),
+            amount_minor=2000,
+            direction=Direction.INFLOW,
+            transaction_type=TransactionType.ADJUSTMENT,
+            source_type=TransactionSourceType.MANUAL,
+        )
 
     with session_scope(session_factory) as session:
         repository = AccountingRepository(session)
@@ -117,7 +127,7 @@ def test_cashflow_summary_respects_direction_and_net_amount(session_factory):
 
     assert summary.inflow_minor == 5000
     assert summary.outflow_minor == 2500
-    assert summary.neutral_minor == 100
+    assert summary.neutral_minor == 2100
     assert summary.net_minor == 2500
 
 
@@ -174,6 +184,51 @@ def test_cashflow_summary_can_use_personal_shared_expense_amounts(session_factor
     assert gross_summary.net_minor == -1001
     assert personal_summary.outflow_minor == 501
     assert personal_summary.net_minor == -501
+
+
+def test_cashflow_summary_can_use_shared_account_personal_reporting_share(
+    session_factory,
+):
+    with session_scope(session_factory) as session:
+        repository = AccountingRepository(session)
+        accounting_service = AccountingService(repository)
+        user_profile = accounting_service.create_user_profile(display_name="Sample User")
+        session.flush()
+        account = accounting_service.create_account(
+            user_profile_id=user_profile.id,
+            name="Shared account",
+            account_type=AccountType.CHECKING,
+            ownership_type=OwnershipType.SHARED,
+            personal_reporting_share_basis_points=5000,
+        )
+        session.flush()
+
+        repository.add_transaction(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            transaction_date=date(2026, 1, 5),
+            amount_minor=1001,
+            direction=Direction.OUTFLOW,
+            transaction_type=TransactionType.EXPENSE,
+            source_type=TransactionSourceType.BANK_IMPORT,
+        )
+
+    with session_scope(session_factory) as session:
+        reporting_service = ReportingService(AccountingRepository(session))
+        gross_summary = reporting_service.summarize_cashflow(
+            user_profile_id=user_profile.id,
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+        )
+        personal_summary = reporting_service.summarize_cashflow(
+            user_profile_id=user_profile.id,
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+            amount_basis=ReportAmountBasis.PERSONAL,
+        )
+
+    assert gross_summary.outflow_minor == 1001
+    assert personal_summary.outflow_minor == 501
 
 
 def test_reporting_excludes_deleted_ignored_transfers_and_other_profiles_by_default(
@@ -311,6 +366,15 @@ def test_category_summary_groups_signed_amounts_and_uncategorized(
             amount_minor=100,
             direction=Direction.OUTFLOW,
             transaction_type=TransactionType.EXPENSE,
+            source_type=TransactionSourceType.MANUAL,
+        )
+        repository.add_transaction(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            transaction_date=date(2026, 1, 9),
+            amount_minor=2000,
+            direction=Direction.INFLOW,
+            transaction_type=TransactionType.ADJUSTMENT,
             source_type=TransactionSourceType.MANUAL,
         )
 

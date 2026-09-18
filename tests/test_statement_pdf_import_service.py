@@ -33,7 +33,11 @@ from lxcell.enums.core_enums import (
 from lxcell.importers import PdfStatementPreview, PdfStatementTransactionCandidate
 from lxcell.importers.pdf_statement import PdfStatementParseIssue
 from lxcell.repositories import AccountingRepository
-from lxcell.services import AccountingService, StatementPdfImportService
+from lxcell.services import (
+    AccountingService,
+    StatementPdfImportService,
+    suggested_statement_account,
+)
 
 
 @pytest.fixture()
@@ -116,6 +120,146 @@ def test_confirmed_statement_pdf_import_writes_auditable_pending_transactions(
         ClassificationDecisionStatus.SUGGESTED,
         ClassificationDecisionStatus.SUGGESTED,
     ]
+
+
+def test_statement_pdf_account_suggestion_uses_unique_configured_hint(
+    session_factory,
+):
+    with session_scope(session_factory) as session:
+        accounting_service = AccountingService(AccountingRepository(session))
+        profile = accounting_service.create_user_profile(display_name="Sample User")
+        session.flush()
+        shared_account = accounting_service.create_account(
+            user_profile_id=profile.id,
+            name="Shared account",
+            account_type=AccountType.CHECKING,
+            statement_match_hint="Shared account ending 1234",
+        )
+        other_account = accounting_service.create_account(
+            user_profile_id=profile.id,
+            name="Other account",
+            account_type=AccountType.CHECKING,
+            statement_match_hint="Other account",
+        )
+        session.flush()
+
+        preview = sample_preview(
+            account_hint_text="Bank A Shared account ending 1234"
+        )
+
+        assert (
+            suggested_statement_account(
+                preview=preview,
+                accounts=[shared_account, other_account],
+            )
+            == shared_account
+        )
+
+        other_account.statement_match_hint = "account ending 1234"
+        session.flush()
+
+        assert (
+            suggested_statement_account(
+                preview=preview,
+                accounts=[shared_account, other_account],
+            )
+            is None
+        )
+
+
+def test_confirmed_bank_csv_import_writes_statement_transactions(session_factory):
+    with session_scope(session_factory) as session:
+        accounting_service = AccountingService(AccountingRepository(session))
+        profile = accounting_service.create_user_profile(display_name="Sample User")
+        session.flush()
+        account = accounting_service.create_account(
+            user_profile_id=profile.id,
+            name="Primary account",
+            account_type=AccountType.CHECKING,
+        )
+        session.flush()
+
+        result = StatementPdfImportService(
+            AccountingRepository(session)
+        ).confirm_import(
+            user_profile_id=profile.id,
+            account_id=account.id,
+            source_system=ImportSourceSystem.BANK_CSV,
+            preview=sample_preview(
+                source_file_hash="csv123",
+                candidates=(
+                    sample_candidate(
+                        row_number_source=1,
+                        description="Merchant A",
+                        amount_minor=1234,
+                        direction=Direction.OUTFLOW,
+                        amount_raw="12,34",
+                        payload_extra={
+                            "transaction_type_raw": "SEPA direct debit",
+                        },
+                    ),
+                ),
+            ),
+            confirmed_by="Sample User",
+            user_confirmed=True,
+        )
+        session.flush()
+
+    with session_scope(session_factory) as session:
+        import_batch = session.scalar(select(ImportBatch))
+        transaction = session.scalar(select(Transaction))
+
+    assert result.transaction_count == 1
+    assert import_batch.source_system == ImportSourceSystem.BANK_CSV
+    assert transaction.payment_method == PaymentMethod.DIRECT_DEBIT
+
+
+def test_confirmed_bank_csv_import_uses_transfer_transaction_type(
+    session_factory,
+):
+    with session_scope(session_factory) as session:
+        accounting_service = AccountingService(AccountingRepository(session))
+        profile = accounting_service.create_user_profile(display_name="Sample User")
+        session.flush()
+        account = accounting_service.create_account(
+            user_profile_id=profile.id,
+            name="Primary account",
+            account_type=AccountType.CHECKING,
+        )
+        session.flush()
+
+        result = StatementPdfImportService(
+            AccountingRepository(session)
+        ).confirm_import(
+            user_profile_id=profile.id,
+            account_id=account.id,
+            source_system=ImportSourceSystem.BANK_CSV,
+            preview=sample_preview(
+                source_file_hash="csv-transfer",
+                candidates=(
+                    sample_candidate(
+                        row_number_source=1,
+                        description="Internal transfer",
+                        amount_minor=100000,
+                        direction=Direction.INFLOW,
+                        amount_raw="1000,00",
+                        payload_extra={
+                            "transaction_type_raw": "Transfer",
+                        },
+                    ),
+                ),
+            ),
+            confirmed_by="Sample User",
+            user_confirmed=True,
+        )
+        session.flush()
+
+    with session_scope(session_factory) as session:
+        transaction = session.scalar(select(Transaction))
+
+    assert result.transaction_count == 1
+    assert transaction.transaction_type == TransactionType.TRANSFER
+    assert transaction.payment_method == PaymentMethod.BANK_TRANSFER
 
 
 def test_confirmed_statement_pdf_import_applies_deterministic_rules(
@@ -528,6 +672,7 @@ def sample_preview(
     source_file_hash: str = "abc123",
     candidates: tuple[PdfStatementTransactionCandidate, ...] | None = None,
     issues: tuple[PdfStatementParseIssue, ...] = (),
+    account_hint_text: str | None = None,
 ) -> PdfStatementPreview:
     return PdfStatementPreview(
         source_file_name="sample.pdf",
@@ -553,6 +698,7 @@ def sample_preview(
             ),
         ),
         issues=issues,
+        account_hint_text=account_hint_text,
     )
 
 
@@ -565,7 +711,18 @@ def sample_candidate(
     direction: Direction = Direction.OUTFLOW,
     amount_raw: str = "12,34",
     content_hash: str = "content123",
+    payload_extra: dict | None = None,
 ) -> PdfStatementTransactionCandidate:
+    payload_raw = {
+        "transaction_date_raw": transaction_date.isoformat(),
+        "posted_date_raw": transaction_date.isoformat(),
+        "description_raw": description,
+        "money_out_raw": amount_raw if direction == Direction.OUTFLOW else None,
+        "money_in_raw": amount_raw if direction == Direction.INFLOW else None,
+        "balance_raw": "987,66",
+    }
+    if payload_extra:
+        payload_raw.update(payload_extra)
     return PdfStatementTransactionCandidate(
         row_number_source=row_number_source,
         page_number=1,
@@ -579,13 +736,6 @@ def sample_candidate(
         currency="EUR",
         balance_raw="987,66",
         balance_minor=98766,
-        payload_raw={
-            "transaction_date_raw": transaction_date.isoformat(),
-            "posted_date_raw": transaction_date.isoformat(),
-            "description_raw": description,
-            "money_out_raw": amount_raw if direction == Direction.OUTFLOW else None,
-            "money_in_raw": amount_raw if direction == Direction.INFLOW else None,
-            "balance_raw": "987,66",
-        },
+        payload_raw=payload_raw,
         content_hash=content_hash,
     )

@@ -101,6 +101,7 @@ class PdfStatementPreview:
     page_count: int
     candidates: tuple[PdfStatementTransactionCandidate, ...]
     issues: tuple[PdfStatementParseIssue, ...]
+    account_hint_text: str | None = None
 
     @property
     def transaction_count(self) -> int:
@@ -123,6 +124,7 @@ class PdfStatementDryRunImporter:
         path = Path(statement_path)
         candidates: list[PdfStatementTransactionCandidate] = []
         issues: list[PdfStatementParseIssue] = []
+        account_hint_text: str | None = None
 
         with pdfplumber.open(path) as pdf:
             for page_index, page in enumerate(pdf.pages, start=1):
@@ -134,6 +136,8 @@ class PdfStatementDryRunImporter:
                     )
                     for word in page.extract_words(x_tolerance=1, y_tolerance=3)
                 ]
+                if account_hint_text is None:
+                    account_hint_text = extract_account_hint_text(words)
                 page_rows = parse_page_words(
                     words,
                     page_number=page_index,
@@ -150,6 +154,7 @@ class PdfStatementDryRunImporter:
             page_count=page_count,
             candidates=tuple(candidates),
             issues=tuple(issues),
+            account_hint_text=account_hint_text,
         )
 
 
@@ -232,6 +237,17 @@ def find_statement_header_top(words: list[PositionedWord]) -> float | None:
     if not header_tops:
         return None
     return max(header_tops)
+
+
+def extract_account_hint_text(words: list[PositionedWord]) -> str | None:
+    """Extract non-persistent header text that can help identify the account."""
+    header_top = find_statement_header_top(words)
+    if header_top is None:
+        header_words = [word for word in words if word.top < 250]
+    else:
+        header_words = [word for word in words if word.top < header_top - 8]
+    hint = clean_description(" ".join(words_text(line) for line in group_words_by_line(header_words)))
+    return hint[:1000] or None
 
 
 def group_words_by_line(words: list[PositionedWord]) -> list[list[PositionedWord]]:
@@ -445,6 +461,10 @@ def words_text_in_column(
     max_x: float,
 ) -> str:
     return " ".join(word.text for word in line if min_x <= word.x0 < max_x).strip()
+
+
+def words_text(words: list[PositionedWord]) -> str:
+    return " ".join(word.text for word in words).strip()
 
 
 def source_row_content_hash(

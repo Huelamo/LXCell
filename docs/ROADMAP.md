@@ -109,6 +109,12 @@ Current design direction:
 - Basic deterministic rule learning and management is implemented in the local
   UI: rules can be created from reviewed imports, edited, deactivated, and
   reactivated.
+- PDF previews can suggest the source account from user-configured account
+  hints, and shared accounts can apply a configured personal reporting
+  percentage to expense-like outflows in personal-basis reports.
+- CSV statement imports now use source-specific read-only adapters. The first
+  supported layout is ING CSV; Revolut CSV should be added as a separate layout
+  adapter while reusing the same confirmed import workflow.
 
 Detailed review log: `docs/phase_4_statement_import.md`.
 

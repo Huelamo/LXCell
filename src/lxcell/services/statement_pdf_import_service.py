@@ -1,9 +1,10 @@
-"""Confirmed PDF statement import workflow."""
+"""Confirmed statement import workflow."""
 
 from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from dataclasses import dataclass
 
 from lxcell.db.models import Account, ImportedTransactionSource
@@ -33,7 +34,7 @@ from lxcell.services.deterministic_classification_service import (
 
 @dataclass(frozen=True)
 class StatementPdfImportResult:
-    """Summary of a confirmed PDF statement import."""
+    """Summary of a confirmed statement import."""
 
     import_batch_id: int
     account_id: int
@@ -53,10 +54,12 @@ class StatementPdfImportResult:
 
 
 class StatementPdfImportService:
-    """Service for writing reviewed statement PDF previews to the database."""
+    """Service for writing reviewed statement previews to the database."""
 
     SUPPORTED_SOURCE_SYSTEMS = {
+        ImportSourceSystem.BANK_CSV,
         ImportSourceSystem.BANK_PDF,
+        ImportSourceSystem.CARD_CSV,
         ImportSourceSystem.CARD_PDF,
     }
 
@@ -75,15 +78,15 @@ class StatementPdfImportService:
         allow_locked_period_override: bool = False,
     ) -> StatementPdfImportResult:
         if not user_confirmed:
-            raise ValueError("Statement PDF import requires explicit confirmation.")
+            raise ValueError("Statement import requires explicit confirmation.")
         if not confirmed_by:
-            raise ValueError("Statement PDF import requires confirmed_by.")
+            raise ValueError("Statement import requires confirmed_by.")
         if source_system not in self.SUPPORTED_SOURCE_SYSTEMS:
-            raise ValueError("Statement PDF import requires a PDF source system.")
+            raise ValueError("Statement import requires a supported source system.")
         if preview.issues:
-            raise ValueError("Statement PDF import has parse issues.")
+            raise ValueError("Statement import has parse issues.")
         if preview.transaction_count == 0:
-            raise ValueError("Statement PDF import has no transaction candidates.")
+            raise ValueError("Statement import has no transaction candidates.")
 
         user_profile = self.repository.get_user_profile(user_profile_id)
         if user_profile is None:
@@ -100,7 +103,7 @@ class StatementPdfImportService:
             source_file_hash=preview.source_file_hash,
         )
         if duplicate_batch is not None:
-            raise ValueError("This statement PDF file was already imported.")
+            raise ValueError("This statement file was already imported.")
 
         import_batch = self.repository.add_import_batch(
             user_profile_id=user_profile_id,
@@ -110,7 +113,7 @@ class StatementPdfImportService:
             source_file_hash=preview.source_file_hash,
             import_status=ImportStatus.PENDING,
             imported_by=confirmed_by,
-            notes="Confirmed statement PDF import.",
+            notes="Confirmed statement import.",
         )
         self.repository.session.flush()
 
@@ -212,7 +215,7 @@ class StatementPdfImportService:
                     decision_source=ClassificationDecisionSource.IMPORT_DEFAULT,
                     decision_status=ClassificationDecisionStatus.SUGGESTED,
                     decided_by="system",
-                    notes="Statement PDF import default.",
+                    notes="Statement import default.",
                 )
             transaction_count += 1
 
@@ -277,7 +280,7 @@ class StatementPdfImportService:
         if account is None:
             raise ValueError("Account was not found for the user profile.")
         if not account.is_active:
-            raise ValueError("Statement PDF import requires an active account.")
+            raise ValueError("Statement import requires an active account.")
         return account
 
     def _get_completed_import_batch_by_file_hash_for_account(
@@ -322,6 +325,9 @@ class StatementPdfImportService:
 def transaction_type_for_statement_candidate(
     candidate: PdfStatementTransactionCandidate,
 ) -> TransactionType:
+    csv_transaction_type = transaction_type_for_csv_candidate(candidate)
+    if csv_transaction_type is not None:
+        return csv_transaction_type
     if candidate.direction == Direction.OUTFLOW:
         return TransactionType.EXPENSE
     return TransactionType.ADJUSTMENT
@@ -330,7 +336,7 @@ def transaction_type_for_statement_candidate(
 def payment_method_for_statement_source(
     source_system: ImportSourceSystem,
 ) -> PaymentMethod | None:
-    if source_system == ImportSourceSystem.CARD_PDF:
+    if source_system in {ImportSourceSystem.CARD_CSV, ImportSourceSystem.CARD_PDF}:
         return PaymentMethod.CARD
     return None
 
@@ -344,6 +350,9 @@ def payment_method_for_statement_candidate(
         return PaymentMethod.PEER_TO_PEER
     if description_indicates_card_payment(description):
         return PaymentMethod.CARD
+    csv_payment_method = payment_method_for_csv_candidate(candidate)
+    if csv_payment_method is not None:
+        return csv_payment_method
     return payment_method_for_statement_source(source_system)
 
 
@@ -353,6 +362,52 @@ def description_indicates_peer_to_peer_payment(description: str) -> bool:
 
 def description_indicates_card_payment(description: str) -> bool:
     return re.search(r"\b(?:tarjeta|card)\b", description, flags=re.IGNORECASE) is not None
+
+
+def payment_method_for_csv_candidate(
+    candidate: PdfStatementTransactionCandidate,
+) -> PaymentMethod | None:
+    transaction_type = str(candidate.payload_raw.get("transaction_type_raw") or "")
+    normalized = normalize_statement_account_hint(transaction_type)
+    if normalized == "sepa direct debit":
+        return PaymentMethod.DIRECT_DEBIT
+    if normalized in {"batch payment", "online banking", "transfer"}:
+        return PaymentMethod.BANK_TRANSFER
+    return None
+
+
+def transaction_type_for_csv_candidate(
+    candidate: PdfStatementTransactionCandidate,
+) -> TransactionType | None:
+    transaction_type = str(candidate.payload_raw.get("transaction_type_raw") or "")
+    normalized = normalize_statement_account_hint(transaction_type)
+    if normalized == "transfer":
+        return TransactionType.TRANSFER
+    return None
+
+
+def suggested_statement_account(
+    *, preview: PdfStatementPreview, accounts: list[Account]
+) -> Account | None:
+    """Return the unique account whose configured hint appears in the PDF header."""
+    header_text = normalize_statement_account_hint(preview.account_hint_text or "")
+    if not header_text:
+        return None
+    matches = [
+        account
+        for account in accounts
+        if account.statement_match_hint
+        and normalize_statement_account_hint(account.statement_match_hint) in header_text
+    ]
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
+def normalize_statement_account_hint(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    ascii_value = normalized.encode("ascii", "ignore").decode("ascii")
+    return " ".join(ascii_value.casefold().split())
 
 
 def record_id_source(candidate: PdfStatementTransactionCandidate) -> str:
@@ -389,7 +444,10 @@ __all__ = [
     "StatementPdfImportService",
     "description_indicates_card_payment",
     "description_indicates_peer_to_peer_payment",
+    "normalize_statement_account_hint",
+    "payment_method_for_csv_candidate",
     "payment_method_for_statement_candidate",
     "payment_method_for_statement_source",
+    "suggested_statement_account",
     "transaction_type_for_statement_candidate",
 ]

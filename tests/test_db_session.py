@@ -61,3 +61,31 @@ def test_apply_local_schema_updates_adds_profile_transaction_lock(tmp_path):
         column["name"] for column in inspect(engine).get_columns("user_profiles")
     }
     assert "transactions_locked_until" in column_names
+
+
+def test_apply_local_schema_updates_adds_statement_account_fields(tmp_path):
+    engine = create_sqlite_engine(f"sqlite:///{tmp_path / 'lxcell.db'}")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE user_profiles ("
+                "id INTEGER PRIMARY KEY, "
+                "display_name TEXT NOT NULL"
+                ")"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE TABLE accounts ("
+                "id INTEGER PRIMARY KEY, "
+                "user_profile_id INTEGER NOT NULL, "
+                "name TEXT NOT NULL"
+                ")"
+            )
+        )
+
+    apply_local_schema_updates(engine)
+
+    column_names = {column["name"] for column in inspect(engine).get_columns("accounts")}
+    assert "statement_match_hint" in column_names
+    assert "personal_reporting_share_basis_points" in column_names

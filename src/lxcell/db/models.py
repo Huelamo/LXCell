@@ -132,6 +132,8 @@ class Account(IdMixin, TimestampMixin, Base):
         enum_type(OwnershipType), default=OwnershipType.PERSONAL, nullable=False
     )
     external_account_ref: Mapped[str | None] = mapped_column(String(200))
+    statement_match_hint: Mapped[str | None] = mapped_column(String(200))
+    personal_reporting_share_basis_points: Mapped[int | None] = mapped_column(Integer)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     user_profile: Mapped[UserProfile] = relationship(back_populates="accounts")
@@ -146,6 +148,11 @@ class Account(IdMixin, TimestampMixin, Base):
         UniqueConstraint("id", "user_profile_id"),
         UniqueConstraint("user_profile_id", "name"),
         CheckConstraint("length(currency) = 3"),
+        CheckConstraint(
+            "personal_reporting_share_basis_points IS NULL OR "
+            "(personal_reporting_share_basis_points >= 0 AND "
+            "personal_reporting_share_basis_points <= 10000)"
+        ),
     )
 
 

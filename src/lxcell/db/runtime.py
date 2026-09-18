@@ -41,6 +41,23 @@ def apply_local_schema_updates(engine: Engine) -> None:
                 text("ALTER TABLE user_profiles ADD COLUMN transactions_locked_until DATE")
             )
 
+    if "accounts" not in inspector.get_table_names():
+        return
+
+    account_columns = {column["name"] for column in inspector.get_columns("accounts")}
+    with engine.begin() as connection:
+        if "statement_match_hint" not in account_columns:
+            connection.execute(
+                text("ALTER TABLE accounts ADD COLUMN statement_match_hint VARCHAR(200)")
+            )
+        if "personal_reporting_share_basis_points" not in account_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE accounts "
+                    "ADD COLUMN personal_reporting_share_basis_points INTEGER"
+                )
+            )
+
 
 def create_local_session_factory(
     database_path: Path = DEFAULT_DATABASE_PATH,

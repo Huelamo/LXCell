@@ -93,16 +93,90 @@ class AccountingService:
         currency: str = "EUR",
         ownership_type: OwnershipType = OwnershipType.PERSONAL,
         external_account_ref: str | None = None,
+        statement_match_hint: str | None = None,
+        personal_reporting_share_basis_points: int | None = None,
     ) -> Account:
-        return self.repository.add_account(
-            user_profile_id=user_profile_id,
+        self._validate_account_payload(
             name=name,
-            account_type=account_type,
-            institution_name=institution_name,
             currency=currency,
             ownership_type=ownership_type,
-            external_account_ref=external_account_ref,
+            personal_reporting_share_basis_points=personal_reporting_share_basis_points,
         )
+        return self.repository.add_account(
+            user_profile_id=user_profile_id,
+            name=name.strip(),
+            account_type=account_type,
+            institution_name=normalized_optional_text(institution_name),
+            currency=currency.upper(),
+            ownership_type=ownership_type,
+            external_account_ref=normalized_optional_text(external_account_ref),
+            statement_match_hint=normalized_optional_text(statement_match_hint),
+            personal_reporting_share_basis_points=personal_reporting_share_basis_points,
+        )
+
+    def update_account(
+        self,
+        *,
+        user_profile_id: int,
+        account_id: int,
+        name: str,
+        account_type: AccountType,
+        institution_name: str | None = None,
+        currency: str = "EUR",
+        ownership_type: OwnershipType = OwnershipType.PERSONAL,
+        external_account_ref: str | None = None,
+        statement_match_hint: str | None = None,
+        personal_reporting_share_basis_points: int | None = None,
+        is_active: bool = True,
+    ) -> Account:
+        self._validate_account_payload(
+            name=name,
+            currency=currency,
+            ownership_type=ownership_type,
+            personal_reporting_share_basis_points=personal_reporting_share_basis_points,
+        )
+        account = self.repository.get_account(
+            account_id=account_id,
+            user_profile_id=user_profile_id,
+        )
+        if account is None:
+            raise ValueError("Account was not found for the user profile.")
+
+        account.name = name.strip()
+        account.account_type = account_type
+        account.institution_name = normalized_optional_text(institution_name)
+        account.currency = currency.upper()
+        account.ownership_type = ownership_type
+        account.external_account_ref = normalized_optional_text(external_account_ref)
+        account.statement_match_hint = normalized_optional_text(statement_match_hint)
+        account.personal_reporting_share_basis_points = (
+            personal_reporting_share_basis_points
+        )
+        account.is_active = is_active
+        return account
+
+    @staticmethod
+    def _validate_account_payload(
+        *,
+        name: str,
+        currency: str,
+        ownership_type: OwnershipType,
+        personal_reporting_share_basis_points: int | None,
+    ) -> None:
+        if not name.strip():
+            raise ValueError("Accounts require a name.")
+        if len(currency.upper()) != 3:
+            raise ValueError("Account currency must use a 3-letter code.")
+        if personal_reporting_share_basis_points is None:
+            return
+        if personal_reporting_share_basis_points < 0:
+            raise ValueError("Personal reporting share cannot be negative.")
+        if personal_reporting_share_basis_points > 10000:
+            raise ValueError("Personal reporting share cannot exceed 100%.")
+        if ownership_type != OwnershipType.SHARED:
+            raise ValueError(
+                "Personal reporting share can only be configured for shared accounts."
+            )
 
     def create_category(
         self,
@@ -1071,6 +1145,14 @@ def protected_transaction_dates(
         for transaction_date in transaction_dates
         if transaction_date <= locked_until
     ]
+
+
+def normalized_optional_text(value: str | None) -> str | None:
+    """Return a stripped optional text value, or None when it is blank."""
+    if value is None:
+        return None
+    text = value.strip()
+    return text or None
 
 
 def normalized_counterparty_name(display_name: str) -> str:

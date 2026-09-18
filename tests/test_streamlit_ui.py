@@ -13,6 +13,7 @@ from lxcell.db.models import (
     ClassificationRule,
     ImportBatch,
     ReimbursementMatch,
+    SharedExpenseAllocation,
     Transaction,
 )
 from lxcell.db.session import create_session_factory, create_sqlite_engine, session_scope
@@ -50,11 +51,14 @@ from lxcell.services import (
 )
 from lxcell.ui.streamlit_app import (
     HISTORICAL_EXCEL_PREVIEW_VERSION,
+    STATEMENT_CSV_PREVIEW_VERSION,
     STATEMENT_PDF_PROTECTED_IMPORT_CONFIRMATION_TEXT,
     STATEMENT_PDF_PREVIEW_VERSION,
+    CREATE_CATEGORY_REVIEW_OPTION,
     account_label_for_transaction_table,
     apply_historical_category_mapping_to_plan,
     canonical_key_from_name,
+    category_review_option_label,
     category_label_for_transaction_table,
     category_table_rows,
     category_table_success_message,
@@ -77,6 +81,7 @@ from lxcell.ui.streamlit_app import (
     find_duplicate_transactions,
     format_signed_amount_minor,
     friendly_integrity_error_message,
+    default_category_type_for_transaction_type,
     historical_preview_can_render,
     historical_category_import_plan,
     historical_category_mapping_suggestions,
@@ -106,12 +111,14 @@ from lxcell.ui.streamlit_app import (
     statement_pdf_protected_candidate_count,
     source_totals_by_category_minor,
     source_totals_by_month_minor,
+    stored_statement_csv_preview_matches,
     stored_historical_preview_matches,
     stored_statement_pdf_preview_matches,
     soft_delete_transaction_for_ui,
     totals_table_rows,
     transaction_table_rows,
     transaction_review_queue_rows,
+    transaction_review_type_mismatch_message,
     tracking_comparison_rows,
     tracking_unmatched_category_rows,
     transaction_table_has_locked_period_changes,
@@ -679,6 +686,32 @@ def test_create_category_from_ui_accepts_explicit_canonical_key(session_factory)
     assert stored_category.canonical_key == "custom_key"
 
 
+def test_category_review_option_label_includes_inline_create_action():
+    assert (
+        category_review_option_label(
+            CREATE_CATEGORY_REVIEW_OPTION,
+            {None: "No category"},
+        )
+        == "Crear nueva categoría..."
+    )
+    assert category_review_option_label(None, {None: "No category"}) == "No category"
+
+
+def test_default_category_type_for_transaction_type_matches_review_type():
+    assert (
+        default_category_type_for_transaction_type(TransactionType.TRANSFER)
+        == CategoryType.TRANSFER
+    )
+    assert (
+        default_category_type_for_transaction_type(TransactionType.REFUND)
+        == CategoryType.EXPENSE
+    )
+    assert (
+        default_category_type_for_transaction_type(TransactionType.ADJUSTMENT)
+        == CategoryType.ADJUSTMENT
+    )
+
+
 def test_friendly_integrity_error_message_handles_duplicate_account_name():
     error = IntegrityError(
         statement=None,
@@ -1184,6 +1217,125 @@ def test_confirm_imported_transaction_review_from_ui_accepts_classification(
     assert latest_decisions[transaction.id].id == decision_id
 
 
+def test_confirm_imported_transaction_review_from_ui_can_create_category(
+    session_factory,
+):
+    with session_scope(session_factory) as session:
+        repository = AccountingRepository(session)
+        service = AccountingService(repository)
+        profile = service.create_user_profile(display_name="Sample User")
+        session.flush()
+        account = service.create_account(
+            user_profile_id=profile.id,
+            name="Primary account",
+            account_type=AccountType.CHECKING,
+        )
+        session.flush()
+        transaction = repository.add_transaction(
+            user_profile_id=profile.id,
+            account_id=account.id,
+            transaction_date=date(2026, 1, 10),
+            description_clean="Merchant A",
+            amount_minor=1234,
+            direction=Direction.OUTFLOW,
+            transaction_type=TransactionType.EXPENSE,
+            source_type=TransactionSourceType.BANK_IMPORT,
+            review_status=TransactionReviewStatus.PENDING_REVIEW,
+        )
+        session.flush()
+
+    decision_id, learned_rule_id, reclassified_count = (
+        confirm_imported_transaction_review_from_ui(
+            session_factory,
+            user_profile_id=profile.id,
+            transaction_id=transaction.id,
+            category_id=None,
+            transaction_type=TransactionType.EXPENSE,
+            payment_method=PaymentMethod.CARD,
+            decided_by="Sample User",
+            new_category_name="New category",
+            new_category_type=CategoryType.EXPENSE,
+        )
+    )
+
+    with session_scope(session_factory) as session:
+        category = session.scalar(select(Category))
+        stored_transaction = session.get(Transaction, transaction.id)
+        decision = session.get(ClassificationDecision, decision_id)
+
+    assert learned_rule_id is None
+    assert reclassified_count == 0
+    assert category.name == "New category"
+    assert category.canonical_key == "new_category"
+    assert stored_transaction.category_id == category.id
+    assert stored_transaction.review_status == TransactionReviewStatus.USER_CONFIRMED
+    assert decision.category_id == category.id
+
+
+def test_confirm_imported_transaction_review_from_ui_can_mark_shared_expense(
+    session_factory,
+):
+    with session_scope(session_factory) as session:
+        repository = AccountingRepository(session)
+        service = AccountingService(repository)
+        profile = service.create_user_profile(display_name="Sample User")
+        session.flush()
+        account = service.create_account(
+            user_profile_id=profile.id,
+            name="Primary account",
+            account_type=AccountType.CHECKING,
+        )
+        category = service.create_category(
+            user_profile_id=profile.id,
+            name="Category A",
+            category_type=CategoryType.EXPENSE,
+            canonical_key="category_a",
+        )
+        counterparty = service.create_counterparty(
+            user_profile_id=profile.id,
+            display_name="Counterparty A",
+        )
+        session.flush()
+        transaction = repository.add_transaction(
+            user_profile_id=profile.id,
+            account_id=account.id,
+            transaction_date=date(2026, 1, 10),
+            description_clean="Merchant A",
+            amount_minor=1001,
+            direction=Direction.OUTFLOW,
+            transaction_type=TransactionType.EXPENSE,
+            source_type=TransactionSourceType.BANK_IMPORT,
+            review_status=TransactionReviewStatus.PENDING_REVIEW,
+        )
+        session.flush()
+
+    decision_id, learned_rule_id, reclassified_count = (
+        confirm_imported_transaction_review_from_ui(
+            session_factory,
+            user_profile_id=profile.id,
+            transaction_id=transaction.id,
+            category_id=category.id,
+            transaction_type=TransactionType.EXPENSE,
+            payment_method=PaymentMethod.CARD,
+            decided_by="Sample User",
+            mark_shared_50_50=True,
+            shared_counterparty_id=counterparty.id,
+        )
+    )
+
+    with session_scope(session_factory) as session:
+        allocation = session.scalar(select(SharedExpenseAllocation))
+        decision = session.get(ClassificationDecision, decision_id)
+
+    assert learned_rule_id is None
+    assert reclassified_count == 0
+    assert decision is not None
+    assert allocation.transaction_id == transaction.id
+    assert allocation.counterparty_id == counterparty.id
+    assert allocation.personal_share_minor == 501
+    assert allocation.recoverable_share_minor == 500
+
+
 def test_confirm_imported_transaction_review_from_ui_can_create_learned_rule(
     session_factory,
 ):
@@ -1421,6 +1573,21 @@ def test_confirm_imported_transaction_review_reuses_broad_learned_rule(
     assert reclassified_count == 0
     assert len(rules) == 1
     assert rules[0].id == existing_rule.id
+
+
+def test_transaction_review_type_mismatch_message_explains_transfer_requirement(
+):
+    message = transaction_review_type_mismatch_message(
+        category=Category(
+            name="Internal transfer",
+            category_type=CategoryType.TRANSFER,
+        ),
+        transaction_type=TransactionType.ADJUSTMENT,
+    )
+
+    assert message is not None
+    assert "transfer" in message
+    assert "adjustment" in message
 
 
 def test_refresh_pending_classifications_from_ui_applies_existing_rules(
@@ -2126,7 +2293,7 @@ def test_statement_pdf_protected_import_confirmation_requires_exact_text():
 
 
 def test_stored_statement_pdf_preview_matches_rejects_stale_preview():
-    upload_signature = ("statement.pdf", 7, ImportSourceSystem.BANK_PDF.value, "abc123")
+    upload_signature = ("statement.pdf", ImportSourceSystem.BANK_PDF.value, "abc123")
     preview = PdfStatementPreview(
         source_file_name="statement.pdf",
         source_file_hash="abc123",
@@ -2147,6 +2314,33 @@ def test_stored_statement_pdf_preview_matches_rejects_stale_preview():
             "preview": preview,
             "signature": upload_signature,
             "version": STATEMENT_PDF_PREVIEW_VERSION,
+        },
+        upload_signature,
+    )
+
+
+def test_stored_statement_csv_preview_matches_rejects_stale_preview():
+    upload_signature = ("statement.csv", ImportSourceSystem.BANK_CSV.value, "abc123")
+    preview = PdfStatementPreview(
+        source_file_name="statement.csv",
+        source_file_hash="abc123",
+        page_count=1,
+        candidates=(),
+        issues=(),
+    )
+
+    assert not stored_statement_csv_preview_matches(
+        {
+            "preview": object(),
+            "signature": upload_signature,
+        },
+        upload_signature,
+    )
+    assert stored_statement_csv_preview_matches(
+        {
+            "preview": preview,
+            "signature": upload_signature,
+            "version": STATEMENT_CSV_PREVIEW_VERSION,
         },
         upload_signature,
     )

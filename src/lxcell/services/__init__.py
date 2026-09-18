@@ -31,6 +31,7 @@ from lxcell.services.reporting_service import (
 from lxcell.services.statement_pdf_import_service import (
     StatementPdfImportResult,
     StatementPdfImportService,
+    suggested_statement_account,
 )
 
 __all__ = [
@@ -56,4 +57,5 @@ __all__ = [
     "normalized_counterparty_tokens",
     "normalized_counterparty_name",
     "normalized_match_text",
+    "suggested_statement_account",
 ]

@@ -22,6 +22,7 @@ from lxcell.enums.core_enums import (
     ClassificationRuleType,
     Direction,
     ImportSourceSystem,
+    OwnershipType,
     PaymentMethod,
     ReimbursementMatchStatus,
     SharedExpenseStatus,
@@ -56,6 +57,77 @@ def _create_profile_account_category(service: AccountingService):
     )
     service.repository.session.flush()
     return user_profile, account, category
+
+
+def test_create_shared_account_can_store_statement_hint_and_personal_share(
+    session_factory,
+):
+    with session_scope(session_factory) as session:
+        service = AccountingService(AccountingRepository(session))
+        user_profile = service.create_user_profile(display_name="Sample User")
+        session.flush()
+
+        account = service.create_account(
+            user_profile_id=user_profile.id,
+            name="Shared account",
+            account_type=AccountType.CHECKING,
+            ownership_type=OwnershipType.SHARED,
+            statement_match_hint="Shared account ending 1234",
+            personal_reporting_share_basis_points=5000,
+        )
+
+    assert account.statement_match_hint == "Shared account ending 1234"
+    assert account.personal_reporting_share_basis_points == 5000
+
+
+def test_personal_reporting_share_requires_shared_account(session_factory):
+    with session_scope(session_factory) as session:
+        service = AccountingService(AccountingRepository(session))
+        user_profile = service.create_user_profile(display_name="Sample User")
+        session.flush()
+
+        with pytest.raises(
+            ValueError,
+            match="only be configured for shared accounts",
+        ):
+            service.create_account(
+                user_profile_id=user_profile.id,
+                name="Primary account",
+                account_type=AccountType.CHECKING,
+                ownership_type=OwnershipType.PERSONAL,
+                personal_reporting_share_basis_points=5000,
+            )
+
+
+def test_update_account_can_change_statement_hint_and_personal_share(session_factory):
+    with session_scope(session_factory) as session:
+        service = AccountingService(AccountingRepository(session))
+        user_profile = service.create_user_profile(display_name="Sample User")
+        session.flush()
+        account = service.create_account(
+            user_profile_id=user_profile.id,
+            name="Shared account",
+            account_type=AccountType.CHECKING,
+            ownership_type=OwnershipType.SHARED,
+        )
+        session.flush()
+
+        updated = service.update_account(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            name="Updated shared account",
+            account_type=AccountType.SAVINGS,
+            ownership_type=OwnershipType.SHARED,
+            currency="EUR",
+            statement_match_hint="Updated hint",
+            personal_reporting_share_basis_points=2500,
+            is_active=True,
+        )
+
+    assert updated.name == "Updated shared account"
+    assert updated.account_type == AccountType.SAVINGS
+    assert updated.statement_match_hint == "Updated hint"
+    assert updated.personal_reporting_share_basis_points == 2500
 
 
 def test_manual_transaction_with_category_is_confirmed_and_audited(session_factory):

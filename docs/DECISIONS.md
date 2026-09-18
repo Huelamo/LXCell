@@ -517,3 +517,63 @@ the outstanding recoverable share, and a reimbursement date on or after the
 shared expense date. Confirmed matches update the allocation to
 `partially_reimbursed` or `reimbursed`; rejected suggestions are kept for trace.
 Multi-expense reimbursement splitting and automatic confirmation remain deferred.
+
+## 2026-09-15 - Statement Account Hints And Shared Account Reporting Policy
+
+Decision: PDF statement account identification uses optional per-account
+`statement_match_hint` values configured by the user. The importer extracts
+non-persistent header text from the PDF preview and suggests an account only
+when exactly one active configured hint matches. Shared accounts may also define
+`personal_reporting_share_basis_points`, which makes personal-basis reporting
+count only that percentage of expense-like outflows from the account when no
+transaction-specific shared allocation exists.
+
+Reason: statement exports often include enough header text to identify the
+source account, but storing raw account identifiers or full headers is
+unnecessary and risky. A user-configured hint keeps the match explicit and
+local. Shared account accounting is different from reimbursable shared
+expenses: when an expense is paid from a shared account, the user usually wants
+only their accounting share in personal reports, without creating a pending
+reimbursement receivable.
+
+Implication: PDF previews can warn when the selected account differs from the
+detected account. Gross transactions still preserve the full statement amount.
+Personal reporting first honors an explicit `SharedExpenseAllocation`; otherwise
+it applies the shared account percentage policy to `expense`, `fee`, and `tax`
+outflows. The policy is only valid on accounts with `ownership_type = shared`.
+
+## 2026-09-15 - CSV Statement Layout Adapters
+
+Decision: support CSV statement imports through layout-specific read-only
+adapters that normalize source rows into the same statement candidate shape
+used by confirmed PDF imports. The first CSV adapter supports the ING statement
+layout with `Date`, `Name / Description`, `Account`, `Counterparty`, `Code`,
+`Debit/credit`, `Amount (EUR)`, `Transaction type`, and `Notifications`
+columns.
+
+Reason: CSV exports are usually more reliable than PDF parsing, but each bank
+or provider can publish a different layout. A small adapter boundary keeps the
+confirmation, duplicate detection, protected-period handling, classification,
+and review workflow shared, while isolating source-specific parsing.
+
+Implication: `bank_csv` and `card_csv` are accepted statement source systems.
+ING CSV rows map `Debit` to outflow, `Credit` to inflow, parse EUR amounts from
+comma-decimal text, and use source transaction type hints for payment method
+when possible. The raw account column is used only as non-persistent account
+hint text for matching against configured account hints; it is not persisted in
+the row payload. Revolut CSV support should be added as another adapter instead
+of changing the ING parser.
+
+## 2026-09-15 - Adjustment Transactions Are Cashflow-Neutral
+
+Decision: reports treat `transaction_type = adjustment` as neutral cashflow
+regardless of the imported source direction.
+
+Reason: statement imports use `adjustment` as a conservative holding type for
+inflows that are not confidently classified as income, transfer, or refund.
+Counting those rows as income would overstate real income before review.
+
+Implication: cashflow summaries put adjustment amounts in the neutral bucket,
+and category totals give adjustment transactions zero signed contribution.
+User review should change a row from `adjustment` to `income`, `transfer`,
+`refund`, or another specific type when it should affect reporting differently.

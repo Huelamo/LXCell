@@ -117,6 +117,8 @@ Key fields:
 - `currency`
 - `ownership_type`
 - `external_account_ref`
+- `statement_match_hint`
+- `personal_reporting_share_basis_points`
 - `is_active`
 - `created_at`
 - `updated_at`
@@ -143,7 +145,14 @@ Rules:
 - Transactions should normally belong to exactly one account.
 - Transfers between accounts should be represented explicitly instead of being hidden as generic expenses.
 - `external_account_ref` should store a stable masked or source-provided account identifier when available, never sensitive full credentials.
+- `statement_match_hint` stores a user-configured, non-sensitive substring used
+  to suggest the account for PDF statement previews. Raw statement header text
+  should not be persisted.
 - Shared accounts should be represented with `ownership_type = shared` in Phase 1. A separate household/workspace concept can be added later only if it removes real complexity.
+- `personal_reporting_share_basis_points` is optional and only valid for shared
+  accounts. When set, personal-basis reports use that percentage for
+  expense-like outflows from the account unless the transaction has an explicit
+  `SharedExpenseAllocation`.
 - Account names should be unique within a user profile.
 
 ### Category

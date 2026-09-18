@@ -16,6 +16,8 @@ def test_pdf_statement_importer_previews_anonymized_statement(tmp_path: Path) ->
         statement_path,
         pages=[
             [
+                ("Bank A", 43, 760),
+                ("Shared account ending 1234", 43, 748),
                 ("Fecha", 43, 700),
                 ("Fecha valor", 104, 700),
                 ("Descripcion", 166, 700),
@@ -57,6 +59,7 @@ def test_pdf_statement_importer_previews_anonymized_statement(tmp_path: Path) ->
     assert preview.page_count == 2
     assert preview.issues == ()
     assert preview.transaction_count == 3
+    assert "Shared account ending 1234" in (preview.account_hint_text or "")
 
     first, second, third = preview.candidates
     assert first.row_number_source == 1

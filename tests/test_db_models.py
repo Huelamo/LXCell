@@ -97,6 +97,26 @@ def test_enums_are_persisted_as_snake_case_values(session_factory):
     assert row.ownership_type == "personal"
 
 
+def test_account_stores_statement_hint_and_personal_reporting_share(session_factory):
+    with session_scope(session_factory) as session:
+        user_profile = UserProfile(display_name="Sample User")
+        account = Account(
+            user_profile=user_profile,
+            name="Shared account",
+            account_type=AccountType.CHECKING,
+            ownership_type=OwnershipType.SHARED,
+            statement_match_hint="Shared account ending 1234",
+            personal_reporting_share_basis_points=5000,
+        )
+        session.add(account)
+
+    with session_scope(session_factory) as session:
+        stored_account = session.scalar(select(Account))
+
+    assert stored_account.statement_match_hint == "Shared account ending 1234"
+    assert stored_account.personal_reporting_share_basis_points == 5000
+
+
 def test_transaction_rejects_account_from_different_profile(session_factory):
     with session_scope(session_factory) as session:
         first_profile = UserProfile(display_name="Sample User A")

@@ -8,6 +8,7 @@ from lxcell.db.models import BudgetLine, Transaction
 from lxcell.enums.core_enums import (
     CategoryType,
     Direction,
+    OwnershipType,
     SharedExpenseStatus,
     TransactionReviewStatus,
     TransactionType,
@@ -102,11 +103,12 @@ class ReportingService:
                 transaction,
                 amount_basis=amount_basis,
             )
-            if transaction.direction == Direction.INFLOW:
+            cashflow_bucket = self._cashflow_bucket(transaction)
+            if cashflow_bucket == Direction.INFLOW:
                 inflow_minor += report_amount_minor
-            elif transaction.direction == Direction.OUTFLOW:
+            elif cashflow_bucket == Direction.OUTFLOW:
                 outflow_minor += report_amount_minor
-            elif transaction.direction == Direction.NEUTRAL:
+            elif cashflow_bucket == Direction.NEUTRAL:
                 neutral_minor += report_amount_minor
 
         return CashflowSummary(
@@ -301,6 +303,8 @@ class ReportingService:
         *,
         amount_basis: ReportAmountBasis = ReportAmountBasis.GROSS,
     ) -> int:
+        if transaction.transaction_type == TransactionType.ADJUSTMENT:
+            return 0
         report_amount_minor = self._report_amount_minor(
             transaction,
             amount_basis=amount_basis,
@@ -310,6 +314,12 @@ class ReportingService:
         if transaction.direction == Direction.OUTFLOW:
             return -report_amount_minor
         return 0
+
+    @staticmethod
+    def _cashflow_bucket(transaction: Transaction) -> Direction:
+        if transaction.transaction_type == TransactionType.ADJUSTMENT:
+            return Direction.NEUTRAL
+        return transaction.direction
 
     @staticmethod
     def _report_amount_minor(
@@ -325,6 +335,23 @@ class ReportingService:
             and allocation.status != SharedExpenseStatus.WAIVED
         ):
             return allocation.personal_share_minor
+        if (
+            amount_basis == ReportAmountBasis.PERSONAL
+            and transaction.direction == Direction.OUTFLOW
+            and transaction.transaction_type
+            in {
+                TransactionType.EXPENSE,
+                TransactionType.FEE,
+                TransactionType.TAX,
+            }
+            and transaction.account is not None
+            and transaction.account.ownership_type == OwnershipType.SHARED
+            and transaction.account.personal_reporting_share_basis_points is not None
+        ):
+            return personal_share_amount_minor(
+                transaction.amount_minor,
+                transaction.account.personal_reporting_share_basis_points,
+            )
         return transaction.amount_minor
 
     def _budget_actual_line(
@@ -405,6 +432,13 @@ class ReportingService:
         ]
 
 
+def personal_share_amount_minor(amount_minor: int, share_basis_points: int) -> int:
+    """Return the rounded personal amount for an account-level share policy."""
+    if share_basis_points < 0 or share_basis_points > 10000:
+        raise ValueError("Personal share basis points must be between 0 and 10000.")
+    return (amount_minor * share_basis_points + 5000) // 10000
+
+
 __all__ = [
     "BudgetActualLine",
     "BudgetActualSummary",
@@ -412,4 +446,5 @@ __all__ = [
     "CategoryTotal",
     "ReportAmountBasis",
     "ReportingService",
+    "personal_share_amount_minor",
 ]

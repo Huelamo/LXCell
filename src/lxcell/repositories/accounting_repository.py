@@ -92,6 +92,8 @@ class AccountingRepository:
         currency: str = "EUR",
         ownership_type: OwnershipType = OwnershipType.PERSONAL,
         external_account_ref: str | None = None,
+        statement_match_hint: str | None = None,
+        personal_reporting_share_basis_points: int | None = None,
         is_active: bool = True,
     ) -> Account:
         account = Account(
@@ -102,6 +104,8 @@ class AccountingRepository:
             currency=currency,
             ownership_type=ownership_type,
             external_account_ref=external_account_ref,
+            statement_match_hint=statement_match_hint,
+            personal_reporting_share_basis_points=personal_reporting_share_basis_points,
             is_active=is_active,
         )
         self.session.add(account)

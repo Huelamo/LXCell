@@ -3,8 +3,8 @@
 Last updated: 2026-09-13
 
 This document records the initial design for importing user-provided bank and
-card statements into LXCell. The first supported source format is the Spanish
-PDF statement layout represented by anonymized parser tests.
+card statements into LXCell. Supported source formats are implemented as
+read-only adapters that normalize rows into a common statement candidate shape.
 
 No real personal finance details should be added here. Use generic source names
 such as `Bank A`, `Card A`, `Merchant A`, and `Sample User`.
@@ -35,8 +35,13 @@ Implemented:
   into in-memory candidates without database writes.
 - The parser reads repeated statement table headers, operation date, value date,
   description, outgoing amount, incoming amount, and balance.
+- `StatementCsvDryRunImporter` parses the first ING CSV layout into in-memory
+  candidates without database writes. CSV layouts are detected by exact headers
+  so future exports, including Revolut CSV, can be added as separate adapters.
 - The local Streamlit `Importar` tab can preview statement PDFs after the user
   selects an active account and source type.
+- The local Streamlit `Importar` tab can preview statement CSV files after the
+  user selects an active account and source type.
 - The preview shows parsed movement count, page count, parse issues, direction
   totals, first candidate rows, and completed-import file-hash warnings scoped
   to the selected account.
@@ -54,6 +59,8 @@ Implemented:
   lower-confidence rules are recorded as suggestions only.
 - Confirmed PDF imports infer obvious payment methods from statement text,
   including card markers and supported peer-to-peer payment app markers.
+- Confirmed CSV imports reuse the same write path and can infer obvious payment
+  methods from source transaction-type fields where the adapter provides them.
 - The local Streamlit `Transacciones` tab includes a post-import review queue
   for pending imported transactions. The user can accept or correct category,
   transaction type, and payment method one transaction at a time, and each
@@ -67,6 +74,12 @@ Implemented:
   hard-deleted from the local configuration UI after typing an explicit
   confirmation phrase; linked classification decisions are preserved without
   the deleted rule reference.
+- PDF previews extract non-persistent header text and compare it with
+  user-configured account hints, suggesting a selected account only when the
+  match is unique.
+- Shared accounts can define a personal reporting percentage so personal-basis
+  financial reports count only the configured share of expense-like outflows
+  from that account when no transaction-level shared allocation exists.
 - Shared-expense reimbursement suggestions can link incoming statement
   transactions to pending shared-expense allocations after user review.
 - Tests generate synthetic anonymized PDFs at runtime; no real statement file is
@@ -74,8 +87,8 @@ Implemented:
 
 Open:
 
-- Whether later importers should support CSV, XLSX, or other account-specific
-  exports.
+- Which CSV layouts should be added after ING, with Revolut CSV as the next
+  likely candidate.
 - Whether the first UI should allow user-defined column mappings or begin with a
   source-specific parser for each export format.
 - Whether pending imported transactions should be visually excluded from some
@@ -209,7 +222,8 @@ The first import should use conservative defaults:
 - Inflows should become `transaction_type = income` only when a deterministic
   rule or user review classifies them as income.
 - Inflows that are not confidently classified should remain pending for user
-  review using `transaction_type = adjustment` until corrected.
+  review using `transaction_type = adjustment` until corrected. Reporting
+  treats these adjustment rows as neutral rather than income.
 - Refunds should use `transaction_type = refund` only when a deterministic rule
   or user review links the inflow to an expense category.
 - Transfers should use `transaction_type = transfer` only after deterministic
