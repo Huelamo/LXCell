@@ -2,15 +2,25 @@
 
 from dataclasses import dataclass
 from datetime import date
+from enum import StrEnum
 
 from lxcell.db.models import BudgetLine, Transaction
 from lxcell.enums.core_enums import (
     CategoryType,
     Direction,
+    OwnershipType,
+    SharedExpenseStatus,
     TransactionReviewStatus,
     TransactionType,
 )
 from lxcell.repositories import AccountingRepository
+
+
+class ReportAmountBasis(StrEnum):
+    """Controls whether reports use gross or effective personal amounts."""
+
+    GROSS = "gross"
+    PERSONAL = "personal"
 
 
 @dataclass(frozen=True)
@@ -76,7 +86,9 @@ class ReportingService:
         start_date: date,
         end_date: date,
         include_transfers: bool = False,
+        amount_basis: ReportAmountBasis = ReportAmountBasis.GROSS,
     ) -> CashflowSummary:
+        amount_basis = ReportAmountBasis(amount_basis)
         inflow_minor = 0
         outflow_minor = 0
         neutral_minor = 0
@@ -87,12 +99,17 @@ class ReportingService:
             end_date=end_date,
             include_transfers=include_transfers,
         ):
-            if transaction.direction == Direction.INFLOW:
-                inflow_minor += transaction.amount_minor
-            elif transaction.direction == Direction.OUTFLOW:
-                outflow_minor += transaction.amount_minor
-            elif transaction.direction == Direction.NEUTRAL:
-                neutral_minor += transaction.amount_minor
+            report_amount_minor = self._report_amount_minor(
+                transaction,
+                amount_basis=amount_basis,
+            )
+            cashflow_bucket = self._cashflow_bucket(transaction)
+            if cashflow_bucket == Direction.INFLOW:
+                inflow_minor += report_amount_minor
+            elif cashflow_bucket == Direction.OUTFLOW:
+                outflow_minor += report_amount_minor
+            elif cashflow_bucket == Direction.NEUTRAL:
+                neutral_minor += report_amount_minor
 
         return CashflowSummary(
             inflow_minor=inflow_minor,
@@ -108,7 +125,9 @@ class ReportingService:
         start_date: date,
         end_date: date,
         include_transfers: bool = False,
+        amount_basis: ReportAmountBasis = ReportAmountBasis.GROSS,
     ) -> list[CategoryTotal]:
+        amount_basis = ReportAmountBasis(amount_basis)
         totals: dict[int | None, CategoryTotal] = {}
 
         for transaction in self._reportable_transactions(
@@ -119,7 +138,10 @@ class ReportingService:
         ):
             category_id = transaction.category_id
             existing_total = totals.get(category_id)
-            amount_minor = self._signed_amount_minor(transaction)
+            amount_minor = self._signed_amount_minor(
+                transaction,
+                amount_basis=amount_basis,
+            )
             if existing_total is None:
                 totals[category_id] = CategoryTotal(
                     category_id=category_id,
@@ -160,7 +182,9 @@ class ReportingService:
         start_date: date | None = None,
         end_date: date | None = None,
         include_transfers: bool = False,
+        amount_basis: ReportAmountBasis = ReportAmountBasis.GROSS,
     ) -> BudgetActualSummary:
+        amount_basis = ReportAmountBasis(amount_basis)
         budget = self.repository.get_budget(
             budget_id=budget_id,
             user_profile_id=user_profile_id,
@@ -177,6 +201,7 @@ class ReportingService:
             start_date=report_start_date,
             end_date=report_end_date,
             include_transfers=include_transfers,
+            amount_basis=amount_basis,
         )
         category_totals = {
             total.category_id: total.amount_minor
@@ -219,7 +244,8 @@ class ReportingService:
             include_transfers=include_transfers,
         )
         uncategorized_actual_amount_minor = sum(
-            transaction.amount_minor for transaction in uncategorized_transactions
+            self._report_amount_minor(transaction, amount_basis=amount_basis)
+            for transaction in uncategorized_transactions
         )
 
         return BudgetActualSummary(
@@ -271,13 +297,62 @@ class ReportingService:
             return False
         return True
 
-    @staticmethod
-    def _signed_amount_minor(transaction: Transaction) -> int:
+    def _signed_amount_minor(
+        self,
+        transaction: Transaction,
+        *,
+        amount_basis: ReportAmountBasis = ReportAmountBasis.GROSS,
+    ) -> int:
+        if transaction.transaction_type == TransactionType.ADJUSTMENT:
+            return 0
+        report_amount_minor = self._report_amount_minor(
+            transaction,
+            amount_basis=amount_basis,
+        )
         if transaction.direction == Direction.INFLOW:
-            return transaction.amount_minor
+            return report_amount_minor
         if transaction.direction == Direction.OUTFLOW:
-            return -transaction.amount_minor
+            return -report_amount_minor
         return 0
+
+    @staticmethod
+    def _cashflow_bucket(transaction: Transaction) -> Direction:
+        if transaction.transaction_type == TransactionType.ADJUSTMENT:
+            return Direction.NEUTRAL
+        return transaction.direction
+
+    @staticmethod
+    def _report_amount_minor(
+        transaction: Transaction,
+        *,
+        amount_basis: ReportAmountBasis,
+    ) -> int:
+        allocation = transaction.shared_expense_allocation
+        if (
+            amount_basis == ReportAmountBasis.PERSONAL
+            and transaction.direction == Direction.OUTFLOW
+            and allocation is not None
+            and allocation.status != SharedExpenseStatus.WAIVED
+        ):
+            return allocation.personal_share_minor
+        if (
+            amount_basis == ReportAmountBasis.PERSONAL
+            and transaction.direction == Direction.OUTFLOW
+            and transaction.transaction_type
+            in {
+                TransactionType.EXPENSE,
+                TransactionType.FEE,
+                TransactionType.TAX,
+            }
+            and transaction.account is not None
+            and transaction.account.ownership_type == OwnershipType.SHARED
+            and transaction.account.personal_reporting_share_basis_points is not None
+        ):
+            return personal_share_amount_minor(
+                transaction.amount_minor,
+                transaction.account.personal_reporting_share_basis_points,
+            )
+        return transaction.amount_minor
 
     def _budget_actual_line(
         self, *, budget_line: BudgetLine, signed_actual_minor: int
@@ -357,10 +432,19 @@ class ReportingService:
         ]
 
 
+def personal_share_amount_minor(amount_minor: int, share_basis_points: int) -> int:
+    """Return the rounded personal amount for an account-level share policy."""
+    if share_basis_points < 0 or share_basis_points > 10000:
+        raise ValueError("Personal share basis points must be between 0 and 10000.")
+    return (amount_minor * share_basis_points + 5000) // 10000
+
+
 __all__ = [
     "BudgetActualLine",
     "BudgetActualSummary",
     "CashflowSummary",
     "CategoryTotal",
+    "ReportAmountBasis",
     "ReportingService",
+    "personal_share_amount_minor",
 ]

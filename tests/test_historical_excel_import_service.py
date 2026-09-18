@@ -142,6 +142,35 @@ def test_confirmed_historical_excel_import_requires_explicit_confirmation(
         assert session.scalar(select(func.count(ImportBatch.id))) == 0
 
 
+def test_confirmed_historical_excel_import_respects_profile_lock(session_factory):
+    with session_scope(session_factory) as session:
+        service = AccountingService(AccountingRepository(session))
+        profile = service.create_user_profile(display_name="Sample User")
+        session.flush()
+        service.update_user_profile_transaction_lock(
+            user_profile_id=profile.id,
+            transactions_locked_until=date(2026, 1, 31),
+        )
+
+        with pytest.raises(ValueError, match="periodo protegido"):
+            HistoricalExcelImportService(AccountingRepository(session)).confirm_import(
+                user_profile_id=profile.id,
+                preview=sample_preview(),
+                confirmed_by="Sample User",
+                user_confirmed=True,
+            )
+
+        result = HistoricalExcelImportService(AccountingRepository(session)).confirm_import(
+            user_profile_id=profile.id,
+            preview=sample_preview(source_file_hash="override123"),
+            confirmed_by="Sample User",
+            user_confirmed=True,
+            allow_locked_period_override=True,
+        )
+
+    assert result.transaction_count == 4
+
+
 def test_confirmed_historical_excel_import_maps_source_categories_to_existing_category(
     session_factory,
 ):

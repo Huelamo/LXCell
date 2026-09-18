@@ -1,6 +1,6 @@
 # LXCell Data Model
 
-Last updated: 2026-09-12
+Last updated: 2026-09-13
 
 ## Purpose
 
@@ -80,6 +80,7 @@ Key fields:
 - `display_name`
 - `default_currency`
 - `locale`
+- `transactions_locked_until`
 - `is_active`
 - `created_at`
 - `updated_at`
@@ -89,6 +90,10 @@ Rules:
 - All accounts, categories, budgets, imports, and transactions belong to one user profile.
 - Cross-profile data must not be mixed in reports.
 - `locale` defaults to `es_ES` unless the profile needs a different display locale.
+- `transactions_locked_until` is optional. When present, transactions dated on
+  or before that date are protected historical records.
+- Creating, editing, soft-deleting, classifying, or importing protected
+  transactions requires an explicit user override in the application workflow.
 
 ### Account
 
@@ -112,6 +117,8 @@ Key fields:
 - `currency`
 - `ownership_type`
 - `external_account_ref`
+- `statement_match_hint`
+- `personal_reporting_share_basis_points`
 - `is_active`
 - `created_at`
 - `updated_at`
@@ -138,7 +145,14 @@ Rules:
 - Transactions should normally belong to exactly one account.
 - Transfers between accounts should be represented explicitly instead of being hidden as generic expenses.
 - `external_account_ref` should store a stable masked or source-provided account identifier when available, never sensitive full credentials.
+- `statement_match_hint` stores a user-configured, non-sensitive substring used
+  to suggest the account for PDF statement previews. Raw statement header text
+  should not be persisted.
 - Shared accounts should be represented with `ownership_type = shared` in Phase 1. A separate household/workspace concept can be added later only if it removes real complexity.
+- `personal_reporting_share_basis_points` is optional and only valid for shared
+  accounts. When set, personal-basis reports use that percentage for
+  expense-like outflows from the account unless the transaction has an explicit
+  `SharedExpenseAllocation`.
 - Account names should be unique within a user profile.
 
 ### Category
@@ -312,6 +326,117 @@ Rules:
 - If splits exist, reports should use split amounts instead of the parent transaction category.
 - Split totals must equal the parent transaction amount.
 
+### Counterparty
+
+Represents a person or household entity involved in shared-expense workflows.
+
+Key fields:
+
+- `id`
+- `user_profile_id`
+- `display_name`
+- `normalized_name`
+- `aliases_raw`
+- `is_active`
+- `created_at`
+- `updated_at`
+
+Rules:
+
+- Counterparties are scoped to one profile.
+- `normalized_name` is generated from the display name using ASCII
+  normalization and separator folding.
+- Counterparties should be inactivated rather than hard-deleted when historical
+  allocations refer to them.
+- Alias text can later support deterministic reimbursement matching, but it is
+  not sufficient by itself to auto-confirm a match.
+
+### SharedExpenseAllocation
+
+Represents the personal and recoverable interpretation of one shared
+transaction while preserving the original transaction amount.
+
+Key fields:
+
+- `id`
+- `user_profile_id`
+- `transaction_id`
+- `counterparty_id`
+- `personal_share_minor`
+- `recoverable_share_minor`
+- `share_ratio_basis_points`
+- `status`
+- `decided_by`
+- `decided_at`
+- `notes`
+- `created_at`
+- `updated_at`
+
+Suggested `status` values:
+
+- `pending`
+- `partially_reimbursed`
+- `reimbursed`
+- `waived`
+
+Rules:
+
+- The first implementation supports one active allocation per transaction.
+- 50/50 allocations use `share_ratio_basis_points = 5000`.
+- Allocation amounts are stored as integer minor units; totals should equal the
+  parent transaction amount.
+- If a cent cannot be split evenly, the odd cent stays in the personal share so
+  the recoverable amount is never overstated.
+- Removing a shared-expense mark should set `status = waived` instead of
+  deleting the allocation row.
+- Reports distinguish gross transaction totals from effective personal totals
+  that use `personal_share_minor`.
+- Reimbursement matching should link later incoming transfers to pending
+  recoverable shares, but automatic matching remains a separate workflow.
+
+### ReimbursementMatch
+
+Represents a suggested, confirmed, or rejected link between a shared-expense
+allocation and an incoming transaction.
+
+Key fields:
+
+- `id`
+- `user_profile_id`
+- `shared_expense_allocation_id`
+- `reimbursement_transaction_id`
+- `matched_amount_minor`
+- `status`
+- `confidence`
+- `decided_by`
+- `decided_at`
+- `notes`
+- `created_at`
+- `updated_at`
+
+Suggested `status` values:
+
+- `suggested`
+- `confirmed`
+- `rejected`
+
+Rules:
+
+- Matches are scoped to one profile and cannot link records across profiles.
+- Suggested matches are persisted but never treated as confirmed until the user
+  reviews them.
+- The first deterministic matcher requires:
+  - counterparty display name or alias present in the incoming transaction
+    description;
+  - incoming amount less than or equal to the outstanding recoverable share;
+  - incoming transaction date on or after the shared expense date.
+- Confirmed matches update the related shared allocation status to
+  `partially_reimbursed` or `reimbursed`.
+- Rejected matches remain stored for auditability and should not be recreated as
+  new suggestions for the same allocation/transaction pair.
+- A reimbursement transaction should not be confirmed against more than one
+  shared expense in this first workflow.
+
 ### TransferLink
 
 Represents a relationship between two transactions that are the two sides of a transfer.
@@ -448,7 +573,9 @@ Suggested `source_system` values:
 
 - `excel_historical`
 - `bank_csv`
+- `bank_pdf`
 - `card_csv`
+- `card_pdf`
 - `manual_entry`
 - `api`
 - `other`
@@ -466,6 +593,10 @@ Rules:
 - `account_id` can be null because some historical import files can contain transactions from multiple accounts or omit account provenance.
 - `account_id` is required for bank and card statement imports because those
   files represent activity for one selected account.
+- Confirmed imports must respect the selected profile's
+  `transactions_locked_until` date. Protected rows should be blocked, skipped,
+  or require explicit additional user approval depending on the reviewed import
+  workflow.
 - `source_file_name` and `source_file_hash` can be null for manual entries and non-file sources.
 - `source_file_hash` is required for file imports when available to support duplicate import detection.
 - The original file should not be stored in the database by default.
@@ -507,7 +638,9 @@ Rules:
 - `normalized_hash` should support duplicate detection across repeated imports.
 - For statement imports, normalized hashes should be scoped by profile, account,
   source system, dates, amount, direction, currency, normalized description, and
-  source-provided record id when available.
+  source-provided record id when available. Statement balance after the movement
+  can be included when present because it helps distinguish otherwise identical
+  source rows.
 - One source record should create at most one transaction.
 
 ### ImportValidationIssue
@@ -588,13 +721,19 @@ Rules:
 - Rules must be user-profile scoped.
 - Higher-priority rules run first.
 - Rule output should create a `ClassificationDecision`, not silently overwrite a transaction.
-- Phase 1 classification rules should suggest classifications only. They should not automatically confirm transactions.
-- `auto_apply` should remain false in Phase 1. It is included as an explicit future extension point.
 - During statement import work, `auto_apply` can be enabled only for
-  high-confidence deterministic rules or repeated user-confirmed history with no
-  competing category. Auto-assignment should update the transaction
-  classification while keeping imported transactions pending review until the
-  user reviews them.
+  high-confidence deterministic rules with no competing target. Auto-assignment
+  should update the transaction classification while keeping imported
+  transactions pending review until the user reviews them.
+- Repeated user-confirmed history may later become another deterministic signal,
+  but it is not part of the first implemented classifier.
+- The post-import review UI can create explicit learned rules from reviewed
+  transactions when the user chooses to do so.
+- Existing rules can be edited from the local UI and should be deactivated
+  instead of hard-deleted when they should no longer apply.
+- As a narrow privacy exception, a rule can be hard-deleted when its pattern
+  stores sensitive imported description text. Existing classification decisions
+  keep their audit record but lose the nullable `classification_rule_id` link.
 - Merchant-based rules are deferred until merchant normalization is introduced.
 - `confidence` should be stored as an exact decimal value from `0.0000` to `1.0000`.
 
@@ -639,6 +778,8 @@ Rules:
 - The active transaction category should reflect the latest non-superseded accepted decision.
 - Classification decisions can suggest or accept `category_id`, `transaction_type`, and `payment_method`.
 - User corrections should supersede prior decisions instead of deleting them.
+- Manual review may accept a transaction with `category_id` null when the user
+  intentionally leaves it uncategorized.
 - AI suggestions should never be indistinguishable from user-confirmed records.
 - `confidence` should be stored as an exact decimal value from `0.0000` to `1.0000`.
 - `decided_by` is required. Use `system` for non-human decisions such as rules, import defaults, historical matches, and AI suggestions.
@@ -783,6 +924,9 @@ The first implementation should include:
 - `budgets`
 - `budget_lines`
 - `category_mappings`
+- `counterparties`
+- `shared_expense_allocations`
+- `reimbursement_matches`
 
 Can be deferred:
 
@@ -800,6 +944,11 @@ preserve file-scoped category interpretation traceability. `merchants` are
 intentionally deferred from the first implementation schema, but they remain a
 planned concept for automation. Merchant normalization should be revisited
 before building classification automation beyond simple description-based rules.
+`counterparties` and `shared_expense_allocations` were added during Phase 4/5
+preparation to support shared expenses without rewriting original bank/import
+transactions.
+`reimbursement_matches` were added to persist reviewable links between
+shared-expense allocations and incoming reimbursement transactions.
 
 ## Proposal Review Status
 
@@ -812,6 +961,10 @@ Accepted for Phase 1:
 - Do not seed real personal category sets in the public repository.
 - Defer `transaction_splits`, `transfer_links`, `savings_goals`, `merchants`, `excel_workbook_imports`, and `import_validation_issues` from the first implementation schema.
 - Add `category_mappings` during Phase 2 historical Excel import work, scoped to source file hash.
+- Add `counterparties` and `shared_expense_allocations` for initial shared
+  expense tracking.
+- Add `reimbursement_matches` for reviewable reimbursement suggestions and
+  confirmations.
 
 Still open:
 

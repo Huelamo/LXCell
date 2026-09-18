@@ -35,7 +35,9 @@ from lxcell.enums.core_enums import (
     ImportStatus,
     OwnershipType,
     PaymentMethod,
+    ReimbursementMatchStatus,
     RolloverPolicy,
+    SharedExpenseStatus,
     TransactionReviewStatus,
     TransactionSourceType,
     TransactionType,
@@ -84,6 +86,7 @@ class UserProfile(IdMixin, TimestampMixin, Base):
     default_currency: Mapped[str] = mapped_column(String(3), default="EUR", nullable=False)
     locale: Mapped[str] = mapped_column(String(20), default="es_ES", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    transactions_locked_until: Mapped[date | None] = mapped_column(Date)
 
     accounts: Mapped[list["Account"]] = relationship(back_populates="user_profile")
     categories: Mapped[list["Category"]] = relationship(back_populates="user_profile")
@@ -92,6 +95,17 @@ class UserProfile(IdMixin, TimestampMixin, Base):
     )
     transactions: Mapped[list["Transaction"]] = relationship(
         back_populates="user_profile", overlaps="account,category"
+    )
+    counterparties: Mapped[list["Counterparty"]] = relationship(
+        back_populates="user_profile"
+    )
+    shared_expense_allocations: Mapped[list["SharedExpenseAllocation"]] = relationship(
+        back_populates="user_profile",
+        overlaps="counterparty,reimbursement_matches,transaction",
+    )
+    reimbursement_matches: Mapped[list["ReimbursementMatch"]] = relationship(
+        back_populates="user_profile",
+        overlaps="reimbursement_transaction,shared_expense_allocation",
     )
     import_batches: Mapped[list["ImportBatch"]] = relationship(
         back_populates="user_profile", overlaps="account"
@@ -118,6 +132,8 @@ class Account(IdMixin, TimestampMixin, Base):
         enum_type(OwnershipType), default=OwnershipType.PERSONAL, nullable=False
     )
     external_account_ref: Mapped[str | None] = mapped_column(String(200))
+    statement_match_hint: Mapped[str | None] = mapped_column(String(200))
+    personal_reporting_share_basis_points: Mapped[int | None] = mapped_column(Integer)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     user_profile: Mapped[UserProfile] = relationship(back_populates="accounts")
@@ -132,6 +148,11 @@ class Account(IdMixin, TimestampMixin, Base):
         UniqueConstraint("id", "user_profile_id"),
         UniqueConstraint("user_profile_id", "name"),
         CheckConstraint("length(currency) = 3"),
+        CheckConstraint(
+            "personal_reporting_share_basis_points IS NULL OR "
+            "(personal_reporting_share_basis_points >= 0 AND "
+            "personal_reporting_share_basis_points <= 10000)"
+        ),
     )
 
 
@@ -232,6 +253,29 @@ class CategoryMapping(IdMixin, TimestampMixin, Base):
     )
 
 
+class Counterparty(IdMixin, TimestampMixin, Base):
+    """A person or household entity involved in shared expenses."""
+
+    __tablename__ = "counterparties"
+
+    user_profile_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id"), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    aliases_raw: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    user_profile: Mapped[UserProfile] = relationship(back_populates="counterparties")
+    shared_expense_allocations: Mapped[list["SharedExpenseAllocation"]] = relationship(
+        back_populates="counterparty",
+        overlaps="shared_expense_allocations,user_profile",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("id", "user_profile_id"),
+        UniqueConstraint("user_profile_id", "normalized_name"),
+    )
+
+
 class Transaction(IdMixin, TimestampMixin, Base):
     """One normalized financial movement."""
 
@@ -278,6 +322,14 @@ class Transaction(IdMixin, TimestampMixin, Base):
     classification_decisions: Mapped[list["ClassificationDecision"]] = relationship(
         back_populates="transaction"
     )
+    shared_expense_allocation: Mapped["SharedExpenseAllocation | None"] = relationship(
+        back_populates="transaction",
+        overlaps="shared_expense_allocations,user_profile",
+    )
+    reimbursement_matches_received: Mapped[list["ReimbursementMatch"]] = relationship(
+        back_populates="reimbursement_transaction",
+        overlaps="reimbursement_matches,user_profile",
+    )
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -294,6 +346,122 @@ class Transaction(IdMixin, TimestampMixin, Base):
         CheckConstraint(
             "review_status != 'user_confirmed' OR description_clean IS NOT NULL"
         ),
+    )
+
+
+class SharedExpenseAllocation(IdMixin, TimestampMixin, Base):
+    """The personal and recoverable split for a shared transaction."""
+
+    __tablename__ = "shared_expense_allocations"
+
+    user_profile_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id"), nullable=False)
+    transaction_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    counterparty_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    personal_share_minor: Mapped[int] = mapped_column(Integer, nullable=False)
+    recoverable_share_minor: Mapped[int] = mapped_column(Integer, nullable=False)
+    share_ratio_basis_points: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[SharedExpenseStatus] = mapped_column(
+        enum_type(SharedExpenseStatus),
+        default=SharedExpenseStatus.PENDING,
+        nullable=False,
+    )
+    decided_by: Mapped[str] = mapped_column(String(200), default="system", nullable=False)
+    decided_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    user_profile: Mapped[UserProfile] = relationship(
+        back_populates="shared_expense_allocations",
+        overlaps="counterparty,transaction",
+    )
+    transaction: Mapped[Transaction] = relationship(
+        back_populates="shared_expense_allocation",
+        overlaps="shared_expense_allocations,user_profile",
+    )
+    counterparty: Mapped[Counterparty] = relationship(
+        back_populates="shared_expense_allocations",
+        overlaps=(
+            "shared_expense_allocation,shared_expense_allocations,"
+            "transaction,user_profile"
+        ),
+    )
+    reimbursement_matches: Mapped[list["ReimbursementMatch"]] = relationship(
+        back_populates="shared_expense_allocation",
+        overlaps="reimbursement_matches,user_profile",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("id", "user_profile_id"),
+        ForeignKeyConstraint(
+            ["transaction_id", "user_profile_id"],
+            ["transactions.id", "transactions.user_profile_id"],
+        ),
+        ForeignKeyConstraint(
+            ["counterparty_id", "user_profile_id"],
+            ["counterparties.id", "counterparties.user_profile_id"],
+        ),
+        UniqueConstraint("transaction_id"),
+        CheckConstraint("personal_share_minor >= 0"),
+        CheckConstraint("recoverable_share_minor >= 0"),
+        CheckConstraint(
+            "share_ratio_basis_points IS NULL OR "
+            "(share_ratio_basis_points >= 0 AND share_ratio_basis_points <= 10000)"
+        ),
+    )
+
+
+class ReimbursementMatch(IdMixin, TimestampMixin, Base):
+    """A suggested or confirmed link between a shared expense and an inflow."""
+
+    __tablename__ = "reimbursement_matches"
+
+    user_profile_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id"), nullable=False)
+    shared_expense_allocation_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    reimbursement_transaction_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    matched_amount_minor: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[ReimbursementMatchStatus] = mapped_column(
+        enum_type(ReimbursementMatchStatus),
+        default=ReimbursementMatchStatus.SUGGESTED,
+        nullable=False,
+    )
+    confidence: Mapped[Decimal] = mapped_column(
+        Numeric(5, 4), default=Decimal("1.0000"), nullable=False
+    )
+    decided_by: Mapped[str] = mapped_column(String(200), default="system", nullable=False)
+    decided_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    user_profile: Mapped[UserProfile] = relationship(
+        back_populates="reimbursement_matches",
+        overlaps="reimbursement_transaction,shared_expense_allocation",
+    )
+    shared_expense_allocation: Mapped[SharedExpenseAllocation] = relationship(
+        back_populates="reimbursement_matches",
+        overlaps="reimbursement_matches,reimbursement_matches_received,user_profile",
+    )
+    reimbursement_transaction: Mapped[Transaction] = relationship(
+        back_populates="reimbursement_matches_received",
+        overlaps="reimbursement_matches,shared_expense_allocation,user_profile",
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["shared_expense_allocation_id", "user_profile_id"],
+            ["shared_expense_allocations.id", "shared_expense_allocations.user_profile_id"],
+        ),
+        ForeignKeyConstraint(
+            ["reimbursement_transaction_id", "user_profile_id"],
+            ["transactions.id", "transactions.user_profile_id"],
+        ),
+        UniqueConstraint(
+            "shared_expense_allocation_id",
+            "reimbursement_transaction_id",
+        ),
+        CheckConstraint("matched_amount_minor > 0"),
+        CheckConstraint("confidence >= 0 AND confidence <= 1"),
     )
 
 
@@ -516,9 +684,12 @@ __all__ = [
     "CategoryMapping",
     "ClassificationDecision",
     "ClassificationRule",
+    "Counterparty",
     "IdMixin",
     "ImportBatch",
     "ImportedTransactionSource",
+    "ReimbursementMatch",
+    "SharedExpenseAllocation",
     "TimestampMixin",
     "Transaction",
     "UserProfile",

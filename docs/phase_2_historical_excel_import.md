@@ -273,6 +273,9 @@ Accepted:
   and the same `source_file_hash`.
 - Block import if candidate normalized hashes overlap with completed historical
   source rows already stored for the same profile.
+- Block import if candidate dates fall on or before the selected profile's
+  `transactions_locked_until` date, unless the workflow receives explicit
+  additional user approval for the protected historical period.
 - Block import if one source category appears with mixed income/expense column
   semantics in the same preview.
 - Create or reuse the per-profile technical account named `Excel histórico`.

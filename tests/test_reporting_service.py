@@ -9,12 +9,13 @@ from lxcell.enums.core_enums import (
     BudgetPeriodType,
     CategoryType,
     Direction,
+    OwnershipType,
     TransactionReviewStatus,
     TransactionSourceType,
     TransactionType,
 )
 from lxcell.repositories import AccountingRepository
-from lxcell.services import AccountingService, ReportingService
+from lxcell.services import AccountingService, ReportAmountBasis, ReportingService
 
 
 @pytest.fixture()
@@ -106,6 +107,15 @@ def test_cashflow_summary_respects_direction_and_net_amount(session_factory):
             transaction_type=TransactionType.ADJUSTMENT,
             source_type=TransactionSourceType.MANUAL,
         )
+        repository.add_transaction(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            transaction_date=date(2026, 1, 8),
+            amount_minor=2000,
+            direction=Direction.INFLOW,
+            transaction_type=TransactionType.ADJUSTMENT,
+            source_type=TransactionSourceType.MANUAL,
+        )
 
     with session_scope(session_factory) as session:
         repository = AccountingRepository(session)
@@ -117,8 +127,108 @@ def test_cashflow_summary_respects_direction_and_net_amount(session_factory):
 
     assert summary.inflow_minor == 5000
     assert summary.outflow_minor == 2500
-    assert summary.neutral_minor == 100
+    assert summary.neutral_minor == 2100
     assert summary.net_minor == 2500
+
+
+def test_cashflow_summary_can_use_personal_shared_expense_amounts(session_factory):
+    with session_scope(session_factory) as session:
+        (
+            repository,
+            user_profile,
+            _other_profile,
+            account,
+            _other_account,
+            expense_category,
+            _income_category,
+        ) = _create_reporting_context(session)
+        accounting_service = AccountingService(repository)
+        counterparty = accounting_service.create_counterparty(
+            user_profile_id=user_profile.id,
+            display_name="Counterparty A",
+        )
+        session.flush()
+        transaction = repository.add_transaction(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            category_id=expense_category.id,
+            transaction_date=date(2026, 1, 5),
+            amount_minor=1001,
+            direction=Direction.OUTFLOW,
+            transaction_type=TransactionType.EXPENSE,
+            source_type=TransactionSourceType.MANUAL,
+        )
+        session.flush()
+        accounting_service.mark_transaction_shared_50_50(
+            user_profile_id=user_profile.id,
+            transaction_id=transaction.id,
+            counterparty_id=counterparty.id,
+            decided_by="Sample User",
+        )
+
+    with session_scope(session_factory) as session:
+        reporting_service = ReportingService(AccountingRepository(session))
+        gross_summary = reporting_service.summarize_cashflow(
+            user_profile_id=user_profile.id,
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+        )
+        personal_summary = reporting_service.summarize_cashflow(
+            user_profile_id=user_profile.id,
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+            amount_basis=ReportAmountBasis.PERSONAL,
+        )
+
+    assert gross_summary.outflow_minor == 1001
+    assert gross_summary.net_minor == -1001
+    assert personal_summary.outflow_minor == 501
+    assert personal_summary.net_minor == -501
+
+
+def test_cashflow_summary_can_use_shared_account_personal_reporting_share(
+    session_factory,
+):
+    with session_scope(session_factory) as session:
+        repository = AccountingRepository(session)
+        accounting_service = AccountingService(repository)
+        user_profile = accounting_service.create_user_profile(display_name="Sample User")
+        session.flush()
+        account = accounting_service.create_account(
+            user_profile_id=user_profile.id,
+            name="Shared account",
+            account_type=AccountType.CHECKING,
+            ownership_type=OwnershipType.SHARED,
+            personal_reporting_share_basis_points=5000,
+        )
+        session.flush()
+
+        repository.add_transaction(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            transaction_date=date(2026, 1, 5),
+            amount_minor=1001,
+            direction=Direction.OUTFLOW,
+            transaction_type=TransactionType.EXPENSE,
+            source_type=TransactionSourceType.BANK_IMPORT,
+        )
+
+    with session_scope(session_factory) as session:
+        reporting_service = ReportingService(AccountingRepository(session))
+        gross_summary = reporting_service.summarize_cashflow(
+            user_profile_id=user_profile.id,
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+        )
+        personal_summary = reporting_service.summarize_cashflow(
+            user_profile_id=user_profile.id,
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+            amount_basis=ReportAmountBasis.PERSONAL,
+        )
+
+    assert gross_summary.outflow_minor == 1001
+    assert personal_summary.outflow_minor == 501
 
 
 def test_reporting_excludes_deleted_ignored_transfers_and_other_profiles_by_default(
@@ -258,6 +368,15 @@ def test_category_summary_groups_signed_amounts_and_uncategorized(
             transaction_type=TransactionType.EXPENSE,
             source_type=TransactionSourceType.MANUAL,
         )
+        repository.add_transaction(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            transaction_date=date(2026, 1, 9),
+            amount_minor=2000,
+            direction=Direction.INFLOW,
+            transaction_type=TransactionType.ADJUSTMENT,
+            source_type=TransactionSourceType.MANUAL,
+        )
 
     with session_scope(session_factory) as session:
         repository = AccountingRepository(session)
@@ -272,6 +391,73 @@ def test_category_summary_groups_signed_amounts_and_uncategorized(
     assert totals_by_id[income_category.id].amount_minor == 5000
     assert totals_by_id[None].amount_minor == -100
     assert totals_by_id[None].category_name is None
+
+
+def test_category_summary_can_use_personal_shared_expense_amounts(session_factory):
+    with session_scope(session_factory) as session:
+        (
+            repository,
+            user_profile,
+            _other_profile,
+            account,
+            _other_account,
+            expense_category,
+            _income_category,
+        ) = _create_reporting_context(session)
+        accounting_service = AccountingService(repository)
+        counterparty = accounting_service.create_counterparty(
+            user_profile_id=user_profile.id,
+            display_name="Counterparty A",
+        )
+        session.flush()
+        shared_transaction = repository.add_transaction(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            category_id=expense_category.id,
+            transaction_date=date(2026, 1, 5),
+            amount_minor=1000,
+            direction=Direction.OUTFLOW,
+            transaction_type=TransactionType.EXPENSE,
+            source_type=TransactionSourceType.MANUAL,
+        )
+        repository.add_transaction(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            category_id=expense_category.id,
+            transaction_date=date(2026, 1, 6),
+            amount_minor=200,
+            direction=Direction.OUTFLOW,
+            transaction_type=TransactionType.EXPENSE,
+            source_type=TransactionSourceType.MANUAL,
+        )
+        session.flush()
+        accounting_service.mark_transaction_shared_50_50(
+            user_profile_id=user_profile.id,
+            transaction_id=shared_transaction.id,
+            counterparty_id=counterparty.id,
+            decided_by="Sample User",
+        )
+
+    with session_scope(session_factory) as session:
+        reporting_service = ReportingService(AccountingRepository(session))
+        gross_totals = reporting_service.summarize_by_category(
+            user_profile_id=user_profile.id,
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+        )
+        personal_totals = reporting_service.summarize_by_category(
+            user_profile_id=user_profile.id,
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+            amount_basis="personal",
+        )
+
+    assert {total.category_id: total.amount_minor for total in gross_totals}[
+        expense_category.id
+    ] == -1200
+    assert {total.category_id: total.amount_minor for total in personal_totals}[
+        expense_category.id
+    ] == -700
 
 
 def test_reporting_uses_inclusive_date_range(session_factory):
@@ -382,6 +568,126 @@ def test_budget_actuals_compare_planned_and_actual_by_budget_line(
     assert lines_by_category_id[expense_category.id].actual_amount_minor == 1200
     assert lines_by_category_id[expense_category.id].remaining_minor == 1800
     assert lines_by_category_id[income_category.id].actual_amount_minor == 5000
+
+
+def test_budget_actuals_can_use_personal_shared_expense_amounts(session_factory):
+    with session_scope(session_factory) as session:
+        (
+            repository,
+            user_profile,
+            _other_profile,
+            account,
+            _other_account,
+            expense_category,
+            _income_category,
+        ) = _create_reporting_context(session)
+        accounting_service = AccountingService(repository)
+        counterparty = accounting_service.create_counterparty(
+            user_profile_id=user_profile.id,
+            display_name="Counterparty A",
+        )
+        budget = repository.add_budget(
+            user_profile_id=user_profile.id,
+            name="Monthly budget",
+            period_type=BudgetPeriodType.MONTHLY,
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+        )
+        session.flush()
+        repository.add_budget_line(
+            budget_id=budget.id,
+            category_id=expense_category.id,
+            amount_minor=1000,
+        )
+        transaction = repository.add_transaction(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            category_id=expense_category.id,
+            transaction_date=date(2026, 1, 5),
+            amount_minor=1001,
+            direction=Direction.OUTFLOW,
+            transaction_type=TransactionType.EXPENSE,
+            source_type=TransactionSourceType.MANUAL,
+        )
+        session.flush()
+        accounting_service.mark_transaction_shared_50_50(
+            user_profile_id=user_profile.id,
+            transaction_id=transaction.id,
+            counterparty_id=counterparty.id,
+            decided_by="Sample User",
+        )
+
+    with session_scope(session_factory) as session:
+        reporting_service = ReportingService(AccountingRepository(session))
+        gross_summary = reporting_service.summarize_budget_actuals(
+            user_profile_id=user_profile.id,
+            budget_id=budget.id,
+        )
+        personal_summary = reporting_service.summarize_budget_actuals(
+            user_profile_id=user_profile.id,
+            budget_id=budget.id,
+            amount_basis=ReportAmountBasis.PERSONAL,
+        )
+
+    assert gross_summary.actual_amount_minor == 1001
+    assert gross_summary.remaining_minor == -1
+    assert personal_summary.actual_amount_minor == 501
+    assert personal_summary.remaining_minor == 499
+
+
+def test_personal_reporting_ignores_waived_shared_expense_allocations(
+    session_factory,
+):
+    with session_scope(session_factory) as session:
+        (
+            repository,
+            user_profile,
+            _other_profile,
+            account,
+            _other_account,
+            expense_category,
+            _income_category,
+        ) = _create_reporting_context(session)
+        accounting_service = AccountingService(repository)
+        counterparty = accounting_service.create_counterparty(
+            user_profile_id=user_profile.id,
+            display_name="Counterparty A",
+        )
+        session.flush()
+        transaction = repository.add_transaction(
+            user_profile_id=user_profile.id,
+            account_id=account.id,
+            category_id=expense_category.id,
+            transaction_date=date(2026, 1, 5),
+            amount_minor=1000,
+            direction=Direction.OUTFLOW,
+            transaction_type=TransactionType.EXPENSE,
+            source_type=TransactionSourceType.MANUAL,
+        )
+        session.flush()
+        accounting_service.mark_transaction_shared_50_50(
+            user_profile_id=user_profile.id,
+            transaction_id=transaction.id,
+            counterparty_id=counterparty.id,
+            decided_by="Sample User",
+        )
+        accounting_service.waive_shared_expense_allocation(
+            user_profile_id=user_profile.id,
+            transaction_id=transaction.id,
+            decided_by="Sample User",
+        )
+
+    with session_scope(session_factory) as session:
+        personal_summary = ReportingService(
+            AccountingRepository(session)
+        ).summarize_cashflow(
+            user_profile_id=user_profile.id,
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+            amount_basis=ReportAmountBasis.PERSONAL,
+        )
+
+    assert personal_summary.outflow_minor == 1000
 
 
 def test_budget_actuals_use_custom_date_range_and_transfer_default(

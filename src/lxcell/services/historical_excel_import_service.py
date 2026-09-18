@@ -35,6 +35,7 @@ from lxcell.enums.core_enums import (
 )
 from lxcell.importers import HistoricalExcelPreview, HistoricalExcelTransactionCandidate
 from lxcell.repositories import AccountingRepository
+from lxcell.services.accounting_service import protected_transaction_dates
 
 HISTORICAL_EXCEL_ACCOUNT_NAME = "Excel histórico"
 HISTORICAL_EXCEL_DECIDED_BY_DEFAULT = "system"
@@ -66,6 +67,7 @@ class HistoricalExcelImportService:
         confirmed_by: str,
         user_confirmed: bool,
         category_id_overrides_by_source_name: dict[str, int] | None = None,
+        allow_locked_period_override: bool = False,
     ) -> HistoricalExcelImportResult:
         if not user_confirmed:
             raise ValueError("Historical Excel import requires explicit confirmation.")
@@ -107,6 +109,14 @@ class HistoricalExcelImportService:
         user_profile = self.repository.get_user_profile(user_profile_id)
         if user_profile is None:
             raise ValueError("User profile was not found.")
+        if not allow_locked_period_override and protected_transaction_dates(
+            user_profile,
+            [candidate.transaction_date for candidate in preview.candidates],
+        ):
+            raise ValueError(
+                "La importacion contiene fechas en un periodo protegido. "
+                "Confirma el permiso adicional para continuar."
+            )
 
         account = self._get_or_create_historical_account(
             user_profile_id=user_profile_id,

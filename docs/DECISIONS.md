@@ -238,7 +238,7 @@ Decision: add a minimal local Streamlit UI in `src/lxcell/ui/streamlit_app.py` f
 
 Reason: a UI is more practical than the CLI for day-to-day manual entry. The backend now has enough reviewed behavior to expose a small local interface without inventing new financial logic in the presentation layer.
 
-Implication: the UI uses `data/lxcell.db` by default and routes writes through `AccountingService` and `AccountingRepository`. Successful writes show a visible confirmation after Streamlit reruns. If a manual transaction matches an existing registered transaction exactly by date, account, category, description, amount, currency, direction, transaction type, and payment method, the UI asks for explicit duplicate confirmation before writing another row. Transaction edits are made directly in the transactions table and then saved in batch. Classification-changing edits supersede previous classification decisions and create a new accepted manual decision when a category is assigned. Transaction delete actions are soft deletes through `transactions.is_deleted`, not hard deletes. Category edits are made directly in a categories table and can update name, type, display order, and active state. Category delete actions set `categories.is_active = false`, preserving historical transaction links; inactive categories disappear from the normal UI and remain visible only in the advanced category view. In the advanced category view, `estado` is read-only and `acción` is the editable user intent: active categories can be removed from active use, and inactive categories can be reactivated. `canonical_key` is generated automatically from the name on creation, preserved during normal renames, and shown/editable only in an advanced view. It remains a local Phase 1 interface, not the final product UI. Importers, richer review screens, and polished reporting remain later work.
+Implication: the UI uses `data/lxcell.db` by default and routes writes through `AccountingService` and `AccountingRepository`. Successful writes show a visible confirmation after Streamlit reruns. If a manual transaction matches an existing registered transaction exactly by date, account, category, description, amount, currency, direction, transaction type, and payment method, the UI asks for explicit duplicate confirmation before writing another row. Transaction edits are made directly in the transactions table and then saved in batch. Classification-changing edits supersede previous classification decisions and create a new accepted manual decision when a category is assigned. Transaction delete actions are soft deletes through `transactions.is_deleted`, not hard deletes. Category creation and maintenance live in the `Categorías` tab: category edits are made directly in a categories table and can update name, type, display order, and active state. Category delete actions set `categories.is_active = false`, preserving historical transaction links; inactive categories disappear from the normal UI and remain visible only in the advanced category view. In the advanced category view, `estado` is read-only and `acción` is the editable user intent: active categories can be removed from active use, and inactive categories can be reactivated. `canonical_key` is generated automatically from the name on creation, preserved during normal renames, and shown/editable only in an advanced view. It remains a local Phase 1 interface, not the final product UI. Importers, richer review screens, and polished reporting remain later work.
 
 ## 2026-08-22 - Phase 2 Historical Excel Dry-Run Preview
 
@@ -328,7 +328,7 @@ Decision: start Phase 4 with preview-first imports for user-provided bank and ca
 
 Reason: statement files represent known account activity, unlike historical Excel workbooks that mixed account provenance. Requiring a selected account keeps reports, duplicate detection, and audit trails scoped correctly. A preview-first flow preserves the trust model established during historical Excel imports.
 
-Implication: `ImportBatch.account_id` is required for bank and card statement imports, even though it remains nullable for manual entries and historical Excel. The original statement file is not stored in the database or committed to the repository. The first implementation should use anonymized fixtures and can begin with one concrete export format before generalizing column mapping.
+Implication: `ImportBatch.account_id` is required for bank and card statement imports, even though it remains nullable for manual entries and historical Excel. The original statement file is not stored in the database or committed to the repository. The first implementation should use anonymized fixtures and can begin with one concrete PDF export format before generalizing column mapping.
 
 Detailed review log: `docs/phase_4_statement_import.md`.
 
@@ -339,3 +339,241 @@ Decision: the first statement import classifier should use deterministic, high-p
 Reason: the useful goal is to reduce repetitive manual categorization without silently polluting the ledger. Bank descriptions are not category definitions, so statement imports should not create categories from source text. Deterministic classification keeps behavior explainable before AI or merchant normalization are introduced.
 
 Implication: imported transactions may receive a category automatically while still keeping `review_status = pending_review` until the user reviews the transaction. Suggested classifications should be visible in the UI and recorded append-only. User corrections supersede previous decisions rather than deleting them. Merchant normalization, AI classification, transfer matching, and broader rule management remain later work.
+
+## 2026-09-12 - First PDF Statement Preview Parser
+
+Decision: implement the first statement importer as a read-only PDF parser using `pdfplumber`. The parser supports the first Spanish statement layout by reading repeated page headers and extracting operation date, value date, description, outgoing amount, incoming amount, balance, file hash, page number, source row number, compact raw payload, and deterministic content hashes.
+
+Reason: the first real statement source available for design is a PDF export. Supporting it directly lets LXCell start reducing manual entry while preserving the preview-first safety model. Synthetic PDFs generated in tests allow parser behavior to be covered without committing sensitive statement files.
+
+Implication: `pdfplumber` is now a runtime dependency. Source systems include `bank_pdf` and `card_pdf` for future confirmed imports. The parser does not write import batches or transactions and does not classify categories; those remain future Phase 4/5 slices.
+
+## 2026-09-12 - PDF Statement Preview UI
+
+Decision: expose the read-only PDF statement parser in the local Streamlit `Importar` tab. The preview requires an active account and a statement source type, stores the uploaded file only in a temporary parser file, shows aggregate parse results and the first candidate rows, and warns when a completed import batch already exists for the same profile, account, source system, and file hash.
+
+Reason: the user needs to inspect whether a statement PDF is understood before LXCell writes transactions or suggests categories. Account selection belongs in the preview because statement imports are account-specific and duplicate checks must not cross account boundaries.
+
+Implication: the UI still performs no confirmed statement import writes. Row-level duplicate checks, category suggestions, transaction creation, and review flows remain future Phase 4/5 slices.
+
+## 2026-09-12 - Profile Historical Transaction Lock
+
+Decision: add an optional `transactions_locked_until` date to each user profile. Transactions dated on or before that date are considered protected and require an explicit override before they can be created, edited, soft-deleted, classified, or imported.
+
+Reason: historical Excel imports may already represent the user's reviewed manual history. When later statement imports overlap that period, LXCell should not silently duplicate or rewrite settled history.
+
+Implication: manual entry, transaction table edits, classification confirmations, soft deletes, and confirmed historical Excel imports must enforce the profile lock. The local UI exposes the lock in configuration and asks for an additional confirmation when a requested write touches the protected period. Statement PDF preview remains read-only, but marks protected candidate rows so the confirmed statement import workflow can later skip or require explicit override for overlapping history.
+
+## 2026-09-13 - Confirmed PDF Statement Import
+
+Decision: implement confirmed PDF statement imports through `StatementPdfImportService`. The workflow writes from an already parsed `PdfStatementPreview`, requires a selected active account and explicit user confirmation, creates an account-scoped `ImportBatch`, stores one `ImportedTransactionSource` per parsed row, creates transactions only for rows that should enter the ledger, and leaves created transactions as `pending_review`.
+
+Reason: the PDF preview is now trusted enough to start reducing manual transaction entry, but classification automation is still separate work. The import should therefore prioritize source traceability, duplicate protection, and preserving the user's reviewed historical period.
+
+Implication: repeated completed file hashes are blocked per profile, account, and source system. Existing row hashes are recorded as `matched_existing` without creating duplicate transactions. Rows inside the profile's protected historical period are recorded as `ignored` by default and create no transaction unless the user grants the explicit protected-period override by typing the required confirmation text in the UI. Duplicate rows inside the same preview are recorded as `marked_duplicate`. Outflows default to `expense`, inflows default to `adjustment`, and categories may be assigned by high-confidence deterministic rules while the imported transaction remains pending review.
+
+## 2026-09-13 - Deterministic Statement Classification
+
+Decision: implement the first statement classifier as a conservative deterministic service backed by active `ClassificationRule` rows. Confirmed PDF imports run the classifier immediately after each transaction is created. A matching rule can auto-assign category, transaction type, and payment method only when `auto_apply = true`, confidence is at least `0.9500`, the category is active, direction/type are compatible, and all matching rules point to the same target. Lower-confidence useful matches create suggested decisions without mutating the transaction.
+
+Reason: the most useful next step is reducing repetitive categorization of imported statement rows while preserving trust. Deterministic rules are inspectable, auditable, and easier to correct than opaque predictions.
+
+Implication: every deterministic classification creates a `ClassificationDecision` with `decision_source = deterministic_rule`. Auto-classified imports still keep `Transaction.review_status = pending_review`; user confirmation and corrections remain separate review actions. Conflicting rule matches leave the transaction uncategorized so review can resolve the ambiguity. Repeated-history learning, merchant normalization, AI suggestions, and transfer matching remain later design work.
+
+## 2026-09-13 - Post-Import Classification Review Queue
+
+Decision: implement the first transaction review workflow as a post-import queue over persisted `pending_review` transactions, not as pre-write editing inside the PDF preview. The local UI shows pending imported rows with their current category and latest active classification suggestion, then lets the user confirm or correct category, transaction type, and payment method one transaction at a time.
+
+Reason: persisted transactions have stable IDs, source audit rows, and classification history. Reviewing after import keeps the preview focused on source parsing and duplicate/protected-period safety, while the review queue records every accepted correction through the normal classification audit trail.
+
+Implication: confirming a review uses `manual_user` accepted `ClassificationDecision` records, supersedes prior suggestions/decisions, updates the active transaction classification fields, and sets `Transaction.review_status = user_confirmed`. Reviews can intentionally confirm a transaction without category, preserving the fact that the user reviewed it. Protected-period reviews still require the existing additional override.
+
+## 2026-09-13 - Explicit Rule Learning From Review
+
+Decision: allow the post-import review UI to create a reusable deterministic
+`ClassificationRule` from a user-confirmed transaction when the user explicitly
+enables that option. The UI suggests a description pattern from the reviewed
+transaction, strips card-number fragments, branch/location suffixes, trailing
+numeric store codes, opaque alphanumeric references, and repeated merchant
+fragments from that pattern. The pattern text remains editable even before the
+user enables rule creation, and the rule can be marked as auto-applicable when
+future matches are non-conflicting.
+
+Reason: repeated statement descriptions should become faster to process after
+the user classifies them once, but automatic background learning could create
+over-broad rules. Making the rule creation explicit keeps the behavior
+reviewable and easy to understand.
+
+Implication: learned rules use `description_contains` against
+`description_clean`, point to the user-selected active category, preserve the
+reviewed transaction direction/type/payment method, and use high confidence.
+The review helper reuses an equivalent active rule when one already exists
+instead of creating duplicates, then re-runs deterministic classification over
+the remaining pending transactions for the profile so newly learned rules can
+update the current review queue. Broader repeated-history mining remains future
+work.
+
+## 2026-09-13 - Editable Classification Rules
+
+Decision: allow the local UI to edit existing deterministic classification
+rules from the configuration screen. Editable fields include name, pattern,
+rule type, match field, category, direction, transaction type, payment method,
+amount bounds, priority, confidence, auto-apply behavior, and active state.
+
+Reason: explicit rule learning is only practical if the user can correct overly
+narrow or overly broad rules after observing real import behavior. Keeping this
+editable in the application is safer than requiring direct database edits.
+
+Implication: normal rule lifecycle uses deactivation/reactivation instead of
+deletion. Active rules must continue to point to valid active categories when a
+category is selected, and category/type compatibility is checked during
+updates. Editing a rule changes future classification runs and pending rows are
+re-evaluated when the user enters the transactions review screen.
+
+## 2026-09-13 - Privacy Hard Delete For Classification Rules
+
+Decision: allow irreversible hard deletion of deterministic classification
+rules as a narrow privacy exception when rule text contains sensitive imported
+description fragments.
+
+Reason: classification rules are derived automation configuration, not ledger
+transactions or source import records. Deactivating a rule would stop future
+use but would still leave the sensitive pattern stored in the local database.
+
+Implication: the local UI requires typing an explicit confirmation phrase
+before hard-deleting selected rules. Existing `ClassificationDecision` rows are
+preserved for auditability, but their `classification_rule_id` is set to null
+before the rule row is deleted. Transactions, source rows, import batches, and
+manual classification decisions are not deleted by this action.
+
+## 2026-09-13 - Payment Method Hints From Statement Text
+
+Decision: infer selected payment method from obvious statement text markers
+before user review. Descriptions containing card markers should suggest or set
+`payment_method = card`; descriptions containing supported peer-to-peer payment
+platform markers should suggest or set `payment_method = peer_to_peer`.
+
+Reason: payment method is often encoded in the statement description even when
+the source file is imported as a generic bank statement. Detecting obvious
+markers reduces repetitive review edits without guessing a category.
+
+Implication: statement PDF imports set peer-to-peer payment method from known
+payment app markers and card payment method from card markers. The post-import
+review form uses the same text signals when preselecting the reviewed method.
+
+## 2026-09-13 - Shared Expense Allocations
+
+Decision: model shared expenses as an allocation attached to the original
+transaction, not as a replacement transaction or generic split. A
+`Counterparty` belongs to one profile, and a `SharedExpenseAllocation` stores
+the personal share, recoverable share, ratio, status, and decision metadata for
+one transaction.
+
+Reason: shared payments can occur on a personal account while only part of the
+gross payment should count as the user's effective expense. Keeping the original
+transaction intact preserves bank/import traceability, while the allocation
+records how the payment should be interpreted for shared-expense workflows.
+
+Implication: the first implemented UI supports creating counterparties and
+marking an outflow transaction as 50/50. Removing the mark sets the allocation
+to `waived` instead of deleting it. Effective personal reporting,
+reimbursement-transfer matching, partial reimbursement state transitions, and
+multi-counterparty allocations remain deferred follow-up work.
+
+## 2026-09-13 - Gross Versus Personal Reporting Basis
+
+Decision: existing reports remain gross by default, and reporting services can
+opt into `personal` amount basis. In personal mode, active shared outflows use
+`SharedExpenseAllocation.personal_share_minor` instead of the transaction's
+gross `amount_minor`. Inflows and neutral transactions keep their original
+amount until a later reimbursement-matching workflow links them explicitly.
+
+Reason: bank/import traceability requires preserving the original transaction
+amount, but personal budgeting often needs the effective share paid by the user.
+Keeping gross as the default avoids changing existing reports silently, while
+personal mode enables budget and cashflow views that reflect shared expenses.
+
+Implication: cashflow, category totals, and budget actuals now support personal
+amount basis. Waived shared allocations are ignored by personal reporting. The
+local UI can switch cashflow and category reports between gross and personal
+bases. Automatic reimbursement matching remains follow-up work.
+
+## 2026-09-13 - Reviewable Reimbursement Matching
+
+Decision: add `ReimbursementMatch` as a reviewable link between a
+`SharedExpenseAllocation` and an incoming transaction. LXCell may create
+`suggested` matches using conservative deterministic rules, but the user must
+explicitly confirm or reject each match before a shared expense is marked as
+partially or fully reimbursed.
+
+Reason: shared-expense reimbursements often arrive later as ordinary incoming
+transfers. Matching them automatically without review could misclassify income
+or unrelated transfers. A persisted suggestion keeps auditability while letting
+the user resolve the ambiguity.
+
+Implication: the first matcher requires a counterparty display name or alias in
+the incoming transaction description, a compatible amount that does not exceed
+the outstanding recoverable share, and a reimbursement date on or after the
+shared expense date. Confirmed matches update the allocation to
+`partially_reimbursed` or `reimbursed`; rejected suggestions are kept for trace.
+Multi-expense reimbursement splitting and automatic confirmation remain deferred.
+
+## 2026-09-15 - Statement Account Hints And Shared Account Reporting Policy
+
+Decision: PDF statement account identification uses optional per-account
+`statement_match_hint` values configured by the user. The importer extracts
+non-persistent header text from the PDF preview and suggests an account only
+when exactly one active configured hint matches. Shared accounts may also define
+`personal_reporting_share_basis_points`, which makes personal-basis reporting
+count only that percentage of expense-like outflows from the account when no
+transaction-specific shared allocation exists.
+
+Reason: statement exports often include enough header text to identify the
+source account, but storing raw account identifiers or full headers is
+unnecessary and risky. A user-configured hint keeps the match explicit and
+local. Shared account accounting is different from reimbursable shared
+expenses: when an expense is paid from a shared account, the user usually wants
+only their accounting share in personal reports, without creating a pending
+reimbursement receivable.
+
+Implication: PDF previews can warn when the selected account differs from the
+detected account. Gross transactions still preserve the full statement amount.
+Personal reporting first honors an explicit `SharedExpenseAllocation`; otherwise
+it applies the shared account percentage policy to `expense`, `fee`, and `tax`
+outflows. The policy is only valid on accounts with `ownership_type = shared`.
+
+## 2026-09-15 - CSV Statement Layout Adapters
+
+Decision: support CSV statement imports through layout-specific read-only
+adapters that normalize source rows into the same statement candidate shape
+used by confirmed PDF imports. The first CSV adapter supports the ING statement
+layout with `Date`, `Name / Description`, `Account`, `Counterparty`, `Code`,
+`Debit/credit`, `Amount (EUR)`, `Transaction type`, and `Notifications`
+columns.
+
+Reason: CSV exports are usually more reliable than PDF parsing, but each bank
+or provider can publish a different layout. A small adapter boundary keeps the
+confirmation, duplicate detection, protected-period handling, classification,
+and review workflow shared, while isolating source-specific parsing.
+
+Implication: `bank_csv` and `card_csv` are accepted statement source systems.
+ING CSV rows map `Debit` to outflow, `Credit` to inflow, parse EUR amounts from
+comma-decimal text, and use source transaction type hints for payment method
+when possible. The raw account column is used only as non-persistent account
+hint text for matching against configured account hints; it is not persisted in
+the row payload. Revolut CSV support should be added as another adapter instead
+of changing the ING parser.
+
+## 2026-09-15 - Adjustment Transactions Are Cashflow-Neutral
+
+Decision: reports treat `transaction_type = adjustment` as neutral cashflow
+regardless of the imported source direction.
+
+Reason: statement imports use `adjustment` as a conservative holding type for
+inflows that are not confidently classified as income, transfer, or refund.
+Counting those rows as income would overstate real income before review.
+
+Implication: cashflow summaries put adjustment amounts in the neutral bucket,
+and category totals give adjustment transactions zero signed contribution.
+User review should change a row from `adjustment` to `income`, `transfer`,
+`refund`, or another specific type when it should affect reporting differently.
